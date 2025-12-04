@@ -1,72 +1,21 @@
 # llm_agent.py
-# SAFE VERSION — NO REGEX ANYWHERE
 
 def evaluate_structural_steps(code_text: str) -> dict:
     steps = []
     score = 0
 
-    # 1) main detection (NO REGEX)
-    main_ok = ("int main" in code_text) or ("main(" in code_text)
-    steps.append({
-        "name": "main function",
-        "ok": main_ok,
-        "weight": 15,
-        "evidence": "found" if main_ok else "missing"
-    })
-    if main_ok: score += 15
+    def add_step(name, ok, weight, evidence):
+        nonlocal score
+        steps.append({"name": name, "ok": ok, "weight": weight, "evidence": evidence})
+        if ok: score += weight
 
-    # 2) includes
-    includes_ok = "#include" in code_text
-    steps.append({
-        "name": "includes",
-        "ok": includes_ok,
-        "weight": 10,
-        "evidence": "found" if includes_ok else "missing"
-    })
-    if includes_ok: score += 10
+    add_step("main function", "main(" in code_text, 15, "main detected" if "main(" in code_text else "missing")
+    add_step("includes", "#include" in code_text, 10, "includes found" if "#include" in code_text else "none")
+    add_step("input reading", "scanf" in code_text or "fscanf" in code_text, 20, "scanf present" if "scanf" in code_text else "none")
+    add_step("loops", any(x in code_text for x in ["for", "while", "do"]), 20, "loop found" if any(x in code_text for x in ["for","while","do"]) else "none")
+    add_step("output", "printf" in code_text or "puts(" in code_text, 20, "printf present" if "printf" in code_text else "none")
 
-    # 3) input
-    input_ok = "scanf" in code_text or "fscanf" in code_text
-    steps.append({
-        "name": "input reading",
-        "ok": input_ok,
-        "weight": 20,
-        "evidence": "scanf present" if input_ok else "none"
-    })
-    if input_ok: score += 20
-
-    # 4) loop
-    loop_ok = ("for" in code_text) or ("while" in code_text) or ("do" in code_text)
-    steps.append({
-        "name": "loops",
-        "ok": loop_ok,
-        "weight": 20,
-        "evidence": "loop found" if loop_ok else "none"
-    })
-    if loop_ok: score += 20
-
-    # 5) output
-    out_ok = "printf" in code_text or "puts(" in code_text
-    steps.append({
-        "name": "output",
-        "ok": out_ok,
-        "weight": 20,
-        "evidence": "printf present" if out_ok else "none"
-    })
-    if out_ok: score += 20
-
-    # 6) comments
     comments_ok = ("//" in code_text) or ("/*" in code_text)
-    steps.append({
-        "name": "comments",
-        "ok": comments_ok,
-        "weight": 15,
-        "evidence": "present" if comments_ok else "none"
-    })
-    if comments_ok: score += 15
+    add_step("comments", comments_ok, 15, "present" if comments_ok else "none")
 
-    return {
-        "steps": steps,
-        "structural_score": min(score, 100),
-        "has_comments": comments_ok
-    }
+    return {"steps": steps, "structural_score": min(score, 100), "has_comments": comments_ok}
