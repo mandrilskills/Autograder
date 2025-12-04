@@ -1,4 +1,3 @@
-streamlit>=1.18.1
-google-generative-ai
-python-dotenv>=1.0.0
-reportlab>=3.6.12
+streamlit
+google-genai
+reportlab
