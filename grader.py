@@ -1,21 +1,11 @@
 # grader.py
-"""
-Orchestrator using langgraph_agents. JudgeAgent (Gemini) inspects code using the reasoning rubric:
- - intent
- - logical correctness
- - syntax errors
- - key steps implemented
- - closeness to a correct solution
-
-CompilerAgent compiles, TesterAgent optionally runs tests, ReporterAgent (Gemini) generates final report.
-"""
 
 from langgraph_agents import CompilerAgent, TesterAgent, JudgeAgent, ReporterAgent
-from llm_agent import evaluate_structural_steps  # fallback structural analysis
-import shutil, json
+from llm_agent import evaluate_structural_steps
+import shutil
 
-def run_grader_pipeline(code_text: str, tests: list = None, run_examples: bool = False) -> dict:
-    # Create agents
+def run_grader_pipeline(code_text: str, tests=None, run_examples=False):
+
     compiler = CompilerAgent()
     tester = TesterAgent()
     judge = JudgeAgent()
@@ -23,66 +13,56 @@ def run_grader_pipeline(code_text: str, tests: list = None, run_examples: bool =
 
     evaluation = {}
 
-    # 1) compile
-    comp_out = compiler.run(code_text)
-    compile_result = comp_out.get("result", {})
-    evaluation["compile"] = compile_result
+    # 1) Compile
+    comp = compiler.run(code_text)
+    evaluation["compile"] = comp["result"]
 
-    # 2) structural analysis (simple deterministic heuristic as well)
+    # 2) Structural
     structural = evaluate_structural_steps(code_text)
     evaluation["structural_analysis"] = structural
 
-    # 3) judge (Gemini) — evaluate code against the reasoning rubric
-    judge_out = judge.run(code_text, tests or [])
-    evaluation["judge"] = judge_out.get("parsed") if judge_out else {"note":"judge unavailable"}
+    # 3) Judge LLM reasoning
+    judge_out = judge.run(code_text, tests)
+    evaluation["judge"] = judge_out["parsed"]
 
-    # 4) determine tests to run: use provided tests, else use judge suggestions if any
-    suggested_tests = []
-    if isinstance(judge_out, dict) and judge_out.get("parsed"):
-        suggested = judge_out["parsed"].get("suggested_tests", [])
-        for s in suggested:
-            if isinstance(s, str) and "::" in s:
+    # Prepare tests (user provided OR LLM-suggested)
+    suggested = []
+    if "suggested_tests" in judge_out["parsed"]:
+        for s in judge_out["parsed"]["suggested_tests"]:
+            if "::" in s:
                 inp, exp = s.split("::", 1)
-                suggested_tests.append({"input": inp.strip(), "expected": exp.strip()})
-    final_tests = tests or suggested_tests
+                suggested.append({"input": inp.strip(), "expected": exp.strip()})
 
-    # 5) run tests if compiled and tests exist, or if run_examples True (single liveness run)
-    test_out = None
-    if compile_result.get("status") == "success" and final_tests:
-        test_out = tester.run(compile_result.get("binary"), final_tests)
-        evaluation["test"] = test_out
-    elif compile_result.get("status") == "success" and run_examples:
-        test_out = tester.run(compile_result.get("binary"), tests=None)
-        evaluation["test"] = test_out
+    final_tests = tests or suggested
+
+    # 4) Test execution
+    if evaluation["compile"]["status"] == "success" and final_tests:
+        evaluation["test"] = tester.run(evaluation["compile"]["binary"], final_tests)
     else:
-        evaluation["test"] = {"note":"No tests executed"}
+        evaluation["test"] = {"note": "No tests run"}
 
-    # 6) scoring aggregation (weights can be tuned)
-    compile_ok = 1 if compile_result.get("status") == "success" else 0
-    structure_score = structural.get("structural_score", 0) / 100.0
-    test_score = 0.0
-    if test_out and test_out.get("result"):
-        test_score = (test_out["result"].get("score",0) / 100.0) if isinstance(test_out["result"].get("score",0),(int,float)) else 0.0
+    # 5) Score
+    score_compile = 1 if evaluation["compile"]["status"] == "success" else 0
+    score_structure = structural["structural_score"] / 100
+    score_logic = evaluation["judge"].get("logic_score", 0) / 100
+    score_tests = evaluation["test"].get("result", {}).get("score", 0) / 100
 
-    # Weigh judge LLM's logic_score if present
-    judge_logic = 0.0
-    if evaluation.get("judge") and isinstance(evaluation["judge"], dict):
-        judge_logic = (evaluation["judge"].get("logic_score", 0) or 0) / 100.0
+    final_score = (
+        0.2 * score_compile +
+        0.35 * score_structure +
+        0.25 * score_logic +
+        0.20 * score_tests
+    ) * 100
 
-    # combine: 20% compile, 35% structure, 25% judge_logic, 20% tests
-    final_score = round((0.2 * compile_ok + 0.35 * structure_score + 0.25 * judge_logic + 0.20 * test_score) * 100, 2)
-    evaluation["final_score"] = final_score
+    evaluation["final_score"] = round(final_score, 2)
 
-    # 7) reporter LLM: produce final textual report
-    reporter_out = reporter.run(evaluation)
-    evaluation["report"] = reporter_out.get("raw", "(no report)")
+    # 6) Final Report
+    evaluation["report"] = reporter.run(evaluation)["raw"]
 
-    # Cleanup temporary binary directory if present
+    # Cleanup
     try:
-        tmp = compile_result.get("temp_dir")
-        if tmp:
-            shutil.rmtree(tmp, ignore_errors=True)
-    except Exception:
+        shutil.rmtree(evaluation["compile"]["temp_dir"], ignore_errors=True)
+    except:
         pass
 
     return evaluation
