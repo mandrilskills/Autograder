@@ -1,123 +1,88 @@
 # grader.py
 """
-Agentic grader pipeline (no test-case generation).
-Workflow:
-1) Intent extraction / attempt recognition (llm_agent)
-2) Compile code (compiler_runner)
-3) If compile fails: interpret errors and award partial marks
-4) If compile succeeds: structural/step-wise evaluation (llm_agent)
-5) Optional micro-run (single run) if enabled (NOT for untrusted code)
-6) Aggregate scores and produce text report
+Orchestrator using langgraph_agents. JudgeAgent (Gemini) inspects code using the reasoning rubric:
+ - intent
+ - logical correctness
+ - syntax errors
+ - key steps implemented
+ - closeness to a correct solution
+
+CompilerAgent compiles, TesterAgent optionally runs tests, ReporterAgent (Gemini) generates final report.
 """
 
-import shutil
-from llm_agent import analyze_intent, evaluate_structural_steps, interpret_compiler_errors, generate_feedback_text
-from compiler_runner import compile_c_code, run_binary
-from utils import code_hash
-import json, os, shutil
+from langgraph_agents import CompilerAgent, TesterAgent, JudgeAgent, ReporterAgent
+from llm_agent import evaluate_structural_steps  # fallback structural analysis
+import shutil, json
 
-# Rubric weights (sum 100)
-RUBRIC = {
-    "attempt": 10,         # attempt & intent recognition
-    "structure": 30,       # structure: main, includes, IO, loops
-    "algorithm": 40,       # algorithm steps correctness
-    "style": 10,           # comments/readability
-    "execution": 10        # micro-run success (optional)
-}
+def run_grader_pipeline(code_text: str, tests: list = None, run_examples: bool = False) -> dict:
+    # Create agents
+    compiler = CompilerAgent()
+    tester = TesterAgent()
+    judge = JudgeAgent()
+    reporter = ReporterAgent()
 
-def run_grader_pipeline(code_text: str, run_example: bool = False) -> dict:
-    result = {}
-    # 1) Intent & attempt
-    intent = analyze_intent(code_text)
-    result["intent"] = intent
+    evaluation = {}
 
-    # rough attempt score calculation
-    attempt_score = 0
-    if "main" in code_text:
-        attempt_score += 6
-    if "#include" in code_text:
-        attempt_score += 4
-    attempt_score = min(attempt_score, RUBRIC["attempt"])
-    result["attempt_score"] = attempt_score
+    # 1) compile
+    comp_out = compiler.run(code_text)
+    compile_result = comp_out.get("result", {})
+    evaluation["compile"] = compile_result
 
-    # 2) Compile
-    comp = compile_c_code(code_text)
-    result["compile"] = comp
+    # 2) structural analysis (simple deterministic heuristic as well)
+    structural = evaluate_structural_steps(code_text)
+    evaluation["structural_analysis"] = structural
 
-    # interpret compile failure
-    if comp.get("status") != "success":
-        diag = interpret_compiler_errors(comp.get("stderr","") + comp.get("stdout",""))
-        result["compiler_diagnostics"] = diag
+    # 3) judge (Gemini) — evaluate code against the reasoning rubric
+    judge_out = judge.run(code_text, tests or [])
+    evaluation["judge"] = judge_out.get("parsed") if judge_out else {"note":"judge unavailable"}
 
-        # structural analysis from LLM (still usable for partial marks)
-        struct = evaluate_structural_steps(code_text)
-        result["structural_analysis"] = struct
+    # 4) determine tests to run: use provided tests, else use judge suggestions if any
+    suggested_tests = []
+    if isinstance(judge_out, dict) and judge_out.get("parsed"):
+        suggested = judge_out["parsed"].get("suggested_tests", [])
+        for s in suggested:
+            if isinstance(s, str) and "::" in s:
+                inp, exp = s.split("::", 1)
+                suggested_tests.append({"input": inp.strip(), "expected": exp.strip()})
+    final_tests = tests or suggested_tests
 
-        # compute partial scores: structure * proportion of structure weight
-        structure_score = struct.get("structural_score", 0) * (RUBRIC["structure"] / 100.0)
-        algorithm_score = struct.get("structural_score", 0) * (RUBRIC["algorithm"] / 100.0) * 0.25  # lower when not compiled
-        style_score = (10 if struct.get("has_comments") else 0) * (RUBRIC["style"] / 10.0)
+    # 5) run tests if compiled and tests exist, or if run_examples True (single liveness run)
+    test_out = None
+    if compile_result.get("status") == "success" and final_tests:
+        test_out = tester.run(compile_result.get("binary"), final_tests)
+        evaluation["test"] = test_out
+    elif compile_result.get("status") == "success" and run_examples:
+        test_out = tester.run(compile_result.get("binary"), tests=None)
+        evaluation["test"] = test_out
+    else:
+        evaluation["test"] = {"note":"No tests executed"}
 
-        total = round(attempt_score + structure_score + algorithm_score + style_score, 2)
-        result["scores"] = {
-            "attempt": attempt_score,
-            "structure": round(structure_score,2),
-            "algorithm": round(algorithm_score,2),
-            "style": round(style_score,2),
-            "execution": 0,
-            "total": total
-        }
-        result["final_score"] = total
-        result["report"] = generate_feedback_text(result)
-        result["raw_evaluation"] = json.dumps(result, indent=2)
-        return result
+    # 6) scoring aggregation (weights can be tuned)
+    compile_ok = 1 if compile_result.get("status") == "success" else 0
+    structure_score = structural.get("structural_score", 0) / 100.0
+    test_score = 0.0
+    if test_out and test_out.get("result"):
+        test_score = (test_out["result"].get("score",0) / 100.0) if isinstance(test_out["result"].get("score",0),(int,float)) else 0.0
 
-    # 3) If compiled successfully -> structural evaluation
-    struct = evaluate_structural_steps(code_text)
-    result["structural_analysis"] = struct
-    structure_score = struct.get("structural_score", 0) * (RUBRIC["structure"] / 100.0)
-    algorithm_score = struct.get("structural_score", 0) * (RUBRIC["algorithm"] / 100.0)
-    style_score = (10 if struct.get("has_comments") else 0) * (RUBRIC["style"] / 10.0)
+    # Weigh judge LLM's logic_score if present
+    judge_logic = 0.0
+    if evaluation.get("judge") and isinstance(evaluation["judge"], dict):
+        judge_logic = (evaluation["judge"].get("logic_score", 0) or 0) / 100.0
 
-    # 4) Optional micro-run (use with caution)
-    execution_score = 0
-    exec_detail = None
-    if run_example and comp.get("binary"):
-        # micro-run: run without input or a simple '1\\n' only if code expects scanf
-        try:
-            # heuristic: if scanf in code -> give a trivial input; else run once with no input
-            sample_input = ""
-            if "scanf" in code_text:
-                sample_input = "1\n"
-            res = run_binary(comp.get("binary"), input_data=sample_input, timeout=3)
-            exec_detail = res
-            if res.get("ok") and res.get("returncode", 0) == 0:
-                execution_score = RUBRIC["execution"]
-            else:
-                execution_score = 0
-        except Exception:
-            execution_score = 0
+    # combine: 20% compile, 35% structure, 25% judge_logic, 20% tests
+    final_score = round((0.2 * compile_ok + 0.35 * structure_score + 0.25 * judge_logic + 0.20 * test_score) * 100, 2)
+    evaluation["final_score"] = final_score
 
-    total = round(attempt_score + structure_score + algorithm_score + style_score + execution_score, 2)
-    result["scores"] = {
-        "attempt": attempt_score,
-        "structure": round(structure_score,2),
-        "algorithm": round(algorithm_score,2),
-        "style": round(style_score,2),
-        "execution": round(execution_score,2),
-        "total": total
-    }
-    result["final_score"] = total
-    result["execution"] = exec_detail
-    result["report"] = generate_feedback_text(result)
-    result["raw_evaluation"] = json.dumps(result, indent=2)
+    # 7) reporter LLM: produce final textual report
+    reporter_out = reporter.run(evaluation)
+    evaluation["report"] = reporter_out.get("raw", "(no report)")
 
-    # cleanup compiled artifact (temp dir inside compile info)
+    # Cleanup temporary binary directory if present
     try:
-        td = comp.get("temp_dir")
-        if td and os.path.exists(td):
-            shutil.rmtree(td, ignore_errors=True)
+        tmp = compile_result.get("temp_dir")
+        if tmp:
+            shutil.rmtree(tmp, ignore_errors=True)
     except Exception:
         pass
 
-    return result
+    return evaluation
