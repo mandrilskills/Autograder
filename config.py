@@ -14,6 +14,6 @@ TEST_TIMEOUT_SECONDS = 2
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
-GROQ_MODEL = "meta-llama/llama-4-maverick-17b-128e-instruct"
+GROQ_MODEL = "llama-3.1-8b-instant"
 GEMINI_MODEL = "gemini-2.5-flash"
 
