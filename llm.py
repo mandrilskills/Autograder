@@ -2,9 +2,9 @@ from groq import Groq
 import google.generativeai as genai
 from config import GROQ_API_KEY, GEMINI_API_KEY, GROQ_MODEL, GEMINI_MODEL
 
-# ✅ LangChain wrappers
+# ✅ FIXED IMPORT FOR MODERN LANGCHAIN
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain.schema import HumanMessage
+from langchain_core.messages import HumanMessage   # ✅ CORRECT PATH
 
 groq_client = None
 gemini_model = None
@@ -31,20 +31,24 @@ if GEMINI_API_KEY:
 def groq_generate_tests(prompt):
     if not groq_client:
         return None
+
     chat = groq_client.chat.completions.create(
         messages=[{"role": "user", "content": prompt}],
         model=GROQ_MODEL
     )
     return chat.choices[0].message.content
 
+
 # ---------- GEMINI FINAL REPORT ----------
 def gemini_generate_report(prompt):
     if not gemini_model:
         return None
+
     response = gemini_model.generate_content(prompt)
     return response.text
 
-# ✅ ---------- GEMINI COMPILATION ERROR EXPLAINER (LANGCHAIN) ----------
+
+# ✅ ---------- GEMINI COMPILER ERROR EXPLAINER (LANGCHAIN) ----------
 def gemini_explain_compiler_errors(error_log):
     if not gemini_langchain:
         return "Gemini API not configured. Unable to generate AI explanation."
