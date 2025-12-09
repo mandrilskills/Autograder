@@ -127,3 +127,51 @@ def optimization_agent(source_path):
         "report": "\n".join(suggestions) if suggestions else "No major optimizations required."
     }
 
+def performance_agent(source_path, binary_path):
+    """
+    Measures runtime + checks complexity patterns.
+    Returns score out of 15.
+    """
+
+    import subprocess, time, re
+
+    try:
+        start = time.time()
+        proc = subprocess.run(
+            [binary_path],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=1
+        )
+        runtime = time.time() - start
+    except subprocess.TimeoutExpired:
+        runtime = 5.0  # heavy timeout penalty
+
+    # Try reading source
+    try:
+        src = open(source_path).read()
+    except:
+        src = ""
+
+    # Complexity signals
+    loops = len(re.findall(r"for\s*\(|while\s*\(", src))
+    branches = len(re.findall(r"\bif\b|\bswitch\b|\bcase\b", src))
+
+    score = 15
+
+    # Runtime penalties
+    if runtime > 0.7: score -= 3
+    if runtime > 1.2: score -= 3
+
+    # Complexity penalties
+    if loops > 5: score -= 2
+    if branches > 12: score -= 2
+
+    if score < 0: score = 0
+
+    return {
+        "score": round(score, 2),
+        "report": f"Runtime: {runtime:.3f}s | Loops: {loops} | Branches: {branches}"
+    }
+
+
