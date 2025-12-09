@@ -2,24 +2,24 @@ from groq import Groq
 import google.generativeai as genai
 from config import GROQ_API_KEY, GEMINI_API_KEY, GROQ_MODEL, GEMINI_MODEL
 
-# ✅ FIXED IMPORT FOR MODERN LANGCHAIN
+# ✅ Correct import for LangChain 1.x
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.messages import HumanMessage   # ✅ CORRECT PATH
+from langchain_core.messages import HumanMessage   # <-- FIXED
 
 groq_client = None
 gemini_model = None
 gemini_langchain = None
 
-# ---------- GROQ ----------
+# ---------------- GROQ ----------------
 if GROQ_API_KEY:
     groq_client = Groq(api_key=GROQ_API_KEY)
 
-# ---------- GEMINI DIRECT ----------
+# ---------------- GEMINI DIRECT ----------------
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
     gemini_model = genai.GenerativeModel(GEMINI_MODEL)
 
-# ---------- GEMINI VIA LANGCHAIN (FOR COMPILER ERRORS) ----------
+# ---------------- GEMINI via LANGCHAIN ----------------
 if GEMINI_API_KEY:
     gemini_langchain = ChatGoogleGenerativeAI(
         model=GEMINI_MODEL,
@@ -27,49 +27,32 @@ if GEMINI_API_KEY:
         temperature=0.3
     )
 
-# ---------- GROQ TEST CASE GENERATION ----------
 def groq_generate_tests(prompt):
     if not groq_client:
         return None
-
     chat = groq_client.chat.completions.create(
         messages=[{"role": "user", "content": prompt}],
         model=GROQ_MODEL
     )
     return chat.choices[0].message.content
 
-
-# ---------- GEMINI FINAL REPORT ----------
 def gemini_generate_report(prompt):
     if not gemini_model:
         return None
+    resp = gemini_model.generate_content(prompt)
+    return resp.text
 
-    response = gemini_model.generate_content(prompt)
-    return response.text
-
-
-# ✅ ---------- GEMINI COMPILER ERROR EXPLAINER (LANGCHAIN) ----------
 def gemini_explain_compiler_errors(error_log):
     if not gemini_langchain:
-        return "Gemini API not configured. Unable to generate AI explanation."
+        return "Gemini API not configured."
 
     prompt = f"""
-You are an expert C programming tutor.
+Explain the following gcc compilation errors in simple language.
+Only give hints. Do NOT rewrite or fix the code.
 
-Rules:
-- DO NOT generate a full corrected program.
-- DO NOT rewrite the student's code.
-- ONLY:
-  1. Explain the compilation errors in simple language.
-  2. Provide correction hints.
-  3. Mention what concept the student should revise.
-
-gcc Error Log:
+ERROR LOG:
 {error_log}
 """
 
-    response = gemini_langchain.invoke([
-        HumanMessage(content=prompt)
-    ])
-
+    response = gemini_langchain.invoke([HumanMessage(content=prompt)])
     return response.content
