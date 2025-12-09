@@ -23,25 +23,51 @@ def design_agent(source_path):
     }
 
 # ---------------- GROQ LLM TEST AGENT ----------------
+# ---------------- ✅ GROQ LLM TEST AGENT (FIXED & RELIABLE) ----------------
 def test_agent(title, source_path, binary_path):
+    import json
+    import subprocess
+    from llm import groq_generate_tests
+    from config import TEST_TIMEOUT_SECONDS
+
     prompt = f"""
-Generate 5-6 logical test cases for the following C program.
+You are an automated software test generator for C programs.
 
 Program Title:
 {title}
 
-Return JSON only in this format:
+STRICT INSTRUCTIONS:
+- Generate exactly 5 test cases.
+- Each test case MUST contain:
+  1. "input"
+  2. "expected"
+- Output ONLY valid JSON.
+- No explanation. No markdown.
+
+FORMAT:
 [
-  {{ "input": "value", "expected": "value" }}
+  {{"input": "value", "expected": "value"}},
+  {{"input": "value", "expected": "value"}}
 ]
 """
+
     raw = groq_generate_tests(prompt)
 
-    if not raw:
-        # fallback heuristic if Groq key missing
-        test_cases = [{"input":"5\n"},{"input":"0\n"},{"input":"-1\n"},{"input":"10\n"}]
-    else:
-        test_cases = json.loads(re.findall(r'\[.*\]', raw, re.S)[0])
+    # ✅ HARD VALIDATION + FALLBACK
+    try:
+        json_block = raw[raw.find("["): raw.rfind("]")+1]
+        test_cases = json.loads(json_block)
+        if len(test_cases) != 5:
+            raise ValueError("Not exactly 5 cases")
+    except:
+        # 🔴 Deterministic fallback if Groq fails
+        test_cases = [
+            {"input": "5\n", "expected": "5"},
+            {"input": "0\n", "expected": "0"},
+            {"input": "1\n", "expected": "1"},
+            {"input": "-1\n", "expected": "-1"},
+            {"input": "10\n", "expected": "10"}
+        ]
 
     results = []
     passed = 0
@@ -55,16 +81,22 @@ Return JSON only in this format:
                 stderr=subprocess.PIPE,
                 timeout=TEST_TIMEOUT_SECONDS
             )
-            out = proc.stdout.decode().strip()
-            status = out == str(tc.get("expected", out)).strip()
-            if status: passed += 1
+
+            actual = proc.stdout.decode().strip()
+            expected = str(tc["expected"]).strip()
+            status = actual == expected
+
         except:
+            actual = "Runtime Error"
             status = False
+
+        if status:
+            passed += 1
 
         results.append({
             "input": tc["input"],
-            "expected": tc.get("expected", "LLM"),
-            "actual": out if "out" in locals() else "",
+            "expected": expected,
+            "actual": actual,
             "pass": status
         })
 
@@ -74,22 +106,6 @@ Return JSON only in this format:
         "score": round(score, 2),
         "report": f"{passed}/{len(test_cases)} test cases passed.",
         "cases": results
-    }
-
-# ---------------- PERFORMANCE AGENT ----------------
-def performance_agent(source_path, binary_path):
-    start = time.time()
-    try:
-        subprocess.run([binary_path], timeout=1)
-    except:
-        pass
-    runtime = time.time() - start
-
-    score = 15 if runtime < 0.5 else 12 if runtime < 1 else 8
-
-    return {
-        "score": score,
-        "report": f"Measured runtime ≈ {runtime:.4f}s"
     }
 
 # ---------------- OPTIMIZATION AGENT ----------------
