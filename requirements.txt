@@ -1,3 +1,6 @@
 streamlit
-google-genai
+groq
+google-generativeai
 reportlab
+langchain
+langchain-google-genai
