@@ -9,14 +9,14 @@ def compile_c_code(src):
         bin_path = src[:-2]
     else:
         bin_path = src + ".bin"
-        
-    # -lm matches math library often needed in C
+    
+    # -lm links math library which is common in student code
     proc = subprocess.run(["gcc", src, "-o", bin_path, "-lm"], capture_output=True, text=True)
     return {"success": proc.returncode == 0, "errors": proc.stderr, "binary": bin_path}
 
 def run_cppcheck(src):
     try:
-        # --force ensures all configurations are checked
+        # --force ensures all configs are checked
         proc = subprocess.run(["cppcheck", "--enable=all", "--force", src], stderr=subprocess.PIPE, text=True)
         return proc.stderr
     except FileNotFoundError:
@@ -33,7 +33,7 @@ def generate_pdf(report):
     )
     import tempfile, datetime, os
 
-    # Ensure gemini report is safe to print
+    # Handle missing keys gracefully
     gemini_text = report.get("gemini_final_report", "Not available.")
     
     path = f"{tempfile.gettempdir()}/C_Autograder_Final_Report_{int(datetime.datetime.now().timestamp())}.pdf"
@@ -76,6 +76,7 @@ def generate_pdf(report):
         ("BACKGROUND", (0,0), (-1,0), colors.lightgrey),
         ("GRID", (0,0), (-1,-1), 1, colors.black),
         ("ALIGN", (1,1), (-1,-1), "CENTER"),
+        # FIX: Changed 'Cambria' to 'Helvetica-Bold' (Standard Font)
         ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"),
         ("BOTTOMPADDING", (0,0), (-1,0), 10)
     ]))
@@ -95,7 +96,6 @@ def generate_pdf(report):
 
     test_data = [["Input", "Expected", "Actual", "Pass"]]
     for c in report["tests"]["cases"]:
-        # Sanitize data for PDF
         test_data.append([
             str(c["input"])[:50], 
             str(c["expected"])[:50], 
@@ -125,7 +125,7 @@ def generate_pdf(report):
     # -------- STATIC ANALYSIS --------
     elements.append(Paragraph("STATIC ANALYSIS (CPPCHECK)", styles["Heading2"]))
     static_text = report["static_report"].replace("\n", "<br/>") if report["static_report"] else "No warnings detected."
-    # Truncate if too long to prevent PDF crash
+    # Truncate text if excessively long to prevent PDF crash
     if len(static_text) > 5000: static_text = static_text[:5000] + "... (truncated)"
     elements.append(Paragraph(static_text, styles["Normal"]))
     elements.append(Spacer(1, 16))
