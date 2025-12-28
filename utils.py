@@ -4,16 +4,25 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
 
 def compile_c_code(src):
-    bin_path = src[:-2]
-    proc = subprocess.run(["gcc", src, "-o", bin_path], capture_output=True, text=True)
+    # Safer binary path generation
+    if src.endswith(".c"):
+        bin_path = src[:-2]
+    else:
+        bin_path = src + ".bin"
+        
+    # -lm matches math library often needed in C
+    proc = subprocess.run(["gcc", src, "-o", bin_path, "-lm"], capture_output=True, text=True)
     return {"success": proc.returncode == 0, "errors": proc.stderr, "binary": bin_path}
 
 def run_cppcheck(src):
     try:
-        proc = subprocess.run(["cppcheck", "--enable=all", src], stderr=subprocess.PIPE, text=True)
+        # --force ensures all configurations are checked
+        proc = subprocess.run(["cppcheck", "--enable=all", "--force", src], stderr=subprocess.PIPE, text=True)
         return proc.stderr
-    except:
-        return "cppcheck not installed."
+    except FileNotFoundError:
+        return "cppcheck not installed on server."
+    except Exception as e:
+        return f"Error running cppcheck: {str(e)}"
 
 def generate_pdf(report):
     from reportlab.lib.pagesizes import A4
@@ -24,6 +33,9 @@ def generate_pdf(report):
     )
     import tempfile, datetime, os
 
+    # Ensure gemini report is safe to print
+    gemini_text = report.get("gemini_final_report", "Not available.")
+    
     path = f"{tempfile.gettempdir()}/C_Autograder_Final_Report_{int(datetime.datetime.now().timestamp())}.pdf"
 
     styles = getSampleStyleSheet()
@@ -64,7 +76,7 @@ def generate_pdf(report):
         ("BACKGROUND", (0,0), (-1,0), colors.lightgrey),
         ("GRID", (0,0), (-1,-1), 1, colors.black),
         ("ALIGN", (1,1), (-1,-1), "CENTER"),
-        ("FONTNAME", (0,0), (-1,0), "Cambria"),
+        ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"),
         ("BOTTOMPADDING", (0,0), (-1,0), 10)
     ]))
 
@@ -73,17 +85,23 @@ def generate_pdf(report):
 
     # -------- DESIGN REPORT --------
     elements.append(Paragraph("DESIGN QUALITY ANALYSIS", styles["Heading2"]))
-    elements.append(Paragraph(report["design"]["report"], styles["Normal"]))
+    elements.append(Paragraph(str(report["design"]["report"]), styles["Normal"]))
     elements.append(Spacer(1, 14))
 
     # -------- TEST REPORT --------
     elements.append(Paragraph("FUNCTIONAL TEST EXECUTION REPORT", styles["Heading2"]))
-    elements.append(Paragraph(report["tests"]["report"], styles["Normal"]))
+    elements.append(Paragraph(str(report["tests"]["report"]), styles["Normal"]))
     elements.append(Spacer(1, 10))
 
     test_data = [["Input", "Expected", "Actual", "Pass"]]
     for c in report["tests"]["cases"]:
-        test_data.append([c["input"], c["expected"], c["actual"], str(c["pass"])])
+        # Sanitize data for PDF
+        test_data.append([
+            str(c["input"])[:50], 
+            str(c["expected"])[:50], 
+            str(c["actual"])[:50], 
+            str(c["pass"])
+        ])
 
     test_table = Table(test_data, colWidths=[120, 120, 120, 80])
     test_table.setStyle(TableStyle([
@@ -96,23 +114,25 @@ def generate_pdf(report):
 
     # -------- PERFORMANCE --------
     elements.append(Paragraph("PERFORMANCE & COMPLEXITY ANALYSIS", styles["Heading2"]))
-    elements.append(Paragraph(report["performance"]["report"], styles["Normal"]))
+    elements.append(Paragraph(str(report["performance"]["report"]), styles["Normal"]))
     elements.append(Spacer(1, 14))
 
     # -------- OPTIMIZATION --------
     elements.append(Paragraph("OPTIMIZATION SUGGESTIONS", styles["Heading2"]))
-    elements.append(Paragraph(report["optimization"]["report"], styles["Normal"]))
+    elements.append(Paragraph(str(report["optimization"]["report"]), styles["Normal"]))
     elements.append(Spacer(1, 14))
 
     # -------- STATIC ANALYSIS --------
     elements.append(Paragraph("STATIC ANALYSIS (CPPCHECK)", styles["Heading2"]))
     static_text = report["static_report"].replace("\n", "<br/>") if report["static_report"] else "No warnings detected."
+    # Truncate if too long to prevent PDF crash
+    if len(static_text) > 5000: static_text = static_text[:5000] + "... (truncated)"
     elements.append(Paragraph(static_text, styles["Normal"]))
     elements.append(Spacer(1, 16))
 
     # -------- GEMINI FINAL REPORT --------
     elements.append(Paragraph("GEMINI 2.5 FLASH – FINAL ACADEMIC EVALUATION", styles["Heading2"]))
-    elements.append(Paragraph(report.get("gemini_final_report", "Not available."), styles["Normal"]))
+    elements.append(Paragraph(gemini_text, styles["Normal"]))
     elements.append(Spacer(1, 20))
 
     # -------- FOOTER --------
@@ -121,4 +141,3 @@ def generate_pdf(report):
 
     doc.build(elements)
     return path
-
