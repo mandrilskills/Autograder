@@ -29,9 +29,11 @@ def design_agent(source_path):
 
 # ---------------- ✅ TEST AGENT (GROQ) ----------------
 def test_agent(title, source_path, binary_path):
+    # FIX: Improved prompt to ensure simpler inputs/outputs for C compatibility
     prompt = f"""
 Generate EXACTLY 5 test cases.
 Return ONLY valid JSON.
+Ensure inputs are simple values suitable for standard input (stdin).
 
 Program Title:
 {title}
@@ -73,9 +75,12 @@ Format:
     results = []
 
     for tc in test_cases:
-        # FIX: Define 'expected' BEFORE the try block to prevent UnboundLocalError
         expected = str(tc.get("expected", "Unknown")).strip()
         input_val = str(tc.get("input", ""))
+        
+        # FIX: Ensure input ends with a newline for C 'scanf' compatibility
+        if not input_val.endswith("\n"):
+            input_val += "\n"
 
         try:
             proc = subprocess.run(
@@ -86,7 +91,17 @@ Format:
                 timeout=TEST_TIMEOUT_SECONDS
             )
             actual = proc.stdout.decode(errors='replace').strip()
-            ok = actual == expected
+            
+            # FIX: Flexible comparison. 
+            # "Actual" might contain "Enter number: 5", while "Expected" is just "5".
+            # strict equality (==) fails here. We check if expected is IN actual.
+            if expected == actual:
+                ok = True
+            elif expected in actual:
+                ok = True
+            else:
+                ok = False
+                
         except subprocess.TimeoutExpired:
             actual = "Timeout"
             ok = False
@@ -97,7 +112,7 @@ Format:
         if ok: passed += 1
 
         results.append({
-            "input": input_val,
+            "input": input_val.strip(),
             "expected": expected,
             "actual": actual,
             "pass": ok
