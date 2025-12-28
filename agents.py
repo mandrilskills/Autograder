@@ -7,9 +7,14 @@ from llm import groq_generate_tests
 
 # ---------------- DESIGN AGENT ----------------
 def design_agent(source_path):
-    src = open(source_path).read()
+    try:
+        src = open(source_path, encoding="utf-8", errors="ignore").read()
+    except:
+        src = ""
+        
     lines = src.splitlines()
-    funcs = re.findall(r'\w+\s+\**\w+\s*\([^)]*\)\s*\{', src)
+    # Improved regex to handle braces on new lines
+    funcs = re.findall(r'\w+\s+\**\w+\s*\([^)]*\)\s*[\r\n\s]*\{', src)
     comments = src.count("//") + src.count("/*")
 
     score = 15
@@ -40,10 +45,17 @@ Format:
     raw = groq_generate_tests(prompt)
 
     try:
-        block = raw[raw.find("["): raw.rfind("]")+1]
+        # Robust JSON extraction
+        start_idx = raw.find("[")
+        end_idx = raw.rfind("]")
+        if start_idx == -1 or end_idx == -1:
+            raise ValueError("No JSON found")
+        
+        block = raw[start_idx : end_idx+1]
         test_cases = json.loads(block)
         if len(test_cases) != 5:
-            raise ValueError
+            # Fallback if AI generates wrong number of tests
+            test_cases = test_cases[:5] 
     except:
         test_cases = [
             {"input":"1\n","expected":"1"},
@@ -60,15 +72,18 @@ Format:
         try:
             proc = subprocess.run(
                 [binary_path],
-                input=tc["input"].encode(),
+                input=str(tc["input"]).encode(),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 timeout=TEST_TIMEOUT_SECONDS
             )
-            actual = proc.stdout.decode().strip()
+            actual = proc.stdout.decode(errors='replace').strip()
             expected = str(tc["expected"]).strip()
             ok = actual == expected
-        except:
+        except subprocess.TimeoutExpired:
+            actual = "Timeout"
+            ok = False
+        except Exception:
             actual = "Runtime Error"
             ok = False
 
@@ -87,17 +102,20 @@ Format:
         "cases": results
     }
 
-# ---------------- ✅ PERFORMANCE AGENT (THIS WAS MISSING) ----------------
+# ---------------- ✅ PERFORMANCE AGENT ----------------
 def performance_agent(source_path, binary_path):
     try:
         start = time.time()
-        subprocess.run([binary_path], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=1)
+        # Use config timeout
+        subprocess.run([binary_path], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=TEST_TIMEOUT_SECONDS)
         runtime = time.time() - start
     except subprocess.TimeoutExpired:
-        runtime = 5.0
+        runtime = float(TEST_TIMEOUT_SECONDS) + 0.1 # Mark as exceeded
+    except:
+        runtime = 0.0
 
     try:
-        src = open(source_path).read()
+        src = open(source_path, encoding="utf-8", errors="ignore").read()
     except:
         src = ""
 
@@ -118,7 +136,11 @@ def performance_agent(source_path, binary_path):
 
 # ---------------- OPTIMIZATION AGENT ----------------
 def optimization_agent(source_path):
-    src = open(source_path).read()
+    try:
+        src = open(source_path, encoding="utf-8", errors="ignore").read()
+    except:
+        src = ""
+        
     score = 20
     notes = []
 
@@ -128,7 +150,7 @@ def optimization_agent(source_path):
 
     if re.search(r'for.*printf', src, re.S):
         score -= 3
-        notes.append("printf inside loop — use buffered output.")
+        notes.append("printf inside loop — use buffered output or build string first.")
 
     return {
         "score": max(score, 0),
