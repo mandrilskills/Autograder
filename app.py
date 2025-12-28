@@ -31,6 +31,21 @@ st.set_page_config(
     layout="wide"
 )
 
+# ---------------- SESSION STATE INIT ----------------
+if "code_content" not in st.session_state:
+    st.session_state["code_content"] = ""
+
+# ---------------- CALLBACKS ----------------
+def handle_file_upload():
+    """Reads the uploaded file and populates the code text area."""
+    uploaded_file = st.session_state.get("uploaded_c_file")
+    if uploaded_file is not None:
+        try:
+            content = uploaded_file.read().decode("utf-8")
+        except:
+            content = uploaded_file.read().decode("latin-1")
+        st.session_state["code_content"] = content
+
 # ---------------- SIDEBAR (RUBRIC) ----------------
 with st.sidebar:
     st.title("📊 Evaluation Rubric")
@@ -61,26 +76,34 @@ with st.sidebar:
 st.title("✅ Professional C Autograder System")
 st.caption("University-Ready | Hackathon-Grade | AI-Assisted (No Academic Dishonesty)")
 
-# ---------------- INPUT FORM ----------------
-with st.form("submission_form"):
-    title = st.text_input("📌 Program Title / Problem Description")
-    code_text = st.text_area("✍️ Paste Your C Code Here", height=320)
-    uploaded = st.file_uploader("OR Upload a .c Source File", type=["c"])
-    submitted = st.form_submit_button("🚀 Evaluate Code")
+# ---------------- INPUT SECTION ----------------
+# We removed st.form to allow dynamic UI interactions
+
+title = st.text_input("📌 Program Title / Problem Description")
+
+# LOGIC: If the code area is empty, show the uploader. 
+# If it has content (pasted or uploaded), the uploader vanishes.
+if not st.session_state["code_content"].strip():
+    st.file_uploader(
+        "OR Upload a .c Source File", 
+        type=["c"], 
+        key="uploaded_c_file",
+        on_change=handle_file_upload
+    )
+
+code_text = st.text_area(
+    "✍️ Paste Your C Code Here", 
+    height=320,
+    key="code_content"  # Binds this widget to session state
+)
+
+submitted = st.button("🚀 Evaluate Code")
 
 # ---------------- MAIN PIPELINE ----------------
 if submitted:
     if not title.strip():
         st.error("Program title / description is required.")
         st.stop()
-
-    # ---------- LOAD CODE ----------
-    if uploaded:
-        code_bytes = uploaded.read()
-        try:
-            code_text = code_bytes.decode("utf-8")
-        except:
-            code_text = code_bytes.decode("latin-1")
 
     if not code_text.strip():
         st.error("No C code provided.")
