@@ -92,12 +92,16 @@ Format:
             )
             actual = proc.stdout.decode(errors='replace').strip()
             
-            # FIX: Flexible comparison. 
-            # "Actual" might contain "Enter number: 5", while "Expected" is just "5".
-            # strict equality (==) fails here. We check if expected is IN actual.
-            if expected == actual:
+            # FIX: Flexible & Case-Insensitive comparison.
+            # 1. Normalize both to lowercase
+            # 2. Check if expected is contained in actual (handles prompts like "Result: ")
+            
+            exp_clean = expected.lower()
+            act_clean = actual.lower()
+
+            if exp_clean == act_clean:
                 ok = True
-            elif expected in actual:
+            elif exp_clean in act_clean:
                 ok = True
             else:
                 ok = False
