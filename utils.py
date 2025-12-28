@@ -1,7 +1,8 @@
 import subprocess, os, tempfile, datetime
 from reportlab.lib.pagesizes import A4
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib import colors
 
 def compile_c_code(src):
     # Safer binary path generation
@@ -25,17 +26,12 @@ def run_cppcheck(src):
         return f"Error running cppcheck: {str(e)}"
 
 def generate_pdf(report):
-    from reportlab.lib.pagesizes import A4
-    from reportlab.lib import colors
-    from reportlab.lib.styles import getSampleStyleSheet
-    from reportlab.platypus import (
-        SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
-    )
-    import tempfile, datetime, os
-
     # Handle missing keys gracefully
     gemini_text = report.get("gemini_final_report", "Not available.")
     
+    # FIX: ReportLab Paragraphs ignore \n. Replace with <br /> for proper formatting.
+    gemini_text = gemini_text.replace("\n", "<br />")
+
     path = f"{tempfile.gettempdir()}/C_Autograder_Final_Report_{int(datetime.datetime.now().timestamp())}.pdf"
 
     styles = getSampleStyleSheet()
@@ -76,7 +72,6 @@ def generate_pdf(report):
         ("BACKGROUND", (0,0), (-1,0), colors.lightgrey),
         ("GRID", (0,0), (-1,-1), 1, colors.black),
         ("ALIGN", (1,1), (-1,-1), "CENTER"),
-        # FIX: Changed 'Cambria' to 'Helvetica-Bold' (Standard Font)
         ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"),
         ("BOTTOMPADDING", (0,0), (-1,0), 10)
     ]))
