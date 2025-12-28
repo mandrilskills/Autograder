@@ -8,8 +8,18 @@ def run_orchestration(title, source_c, binary, static_report):
     performance = performance_agent(source_c, binary)
     optimization = optimization_agent(source_c)
 
-    static_warnings = len(static_report.splitlines()) if static_report.strip() else 0
-    static_score = max(0, 20 - static_warnings * 1.5)
+    # Improved Static Analysis Scoring
+    # Count occurrences of actual issues, not just lines
+    # Cppcheck standard format usually includes ": (error)" or ": (warning)"
+    # Fallback to counting lines that have '):' which indicates a file position
+    issue_count = static_report.count("error:") + static_report.count("warning:")
+    if issue_count == 0 and "Checking" in static_report:
+         # Fallback if standard keywords aren't found but report is not empty
+         # Filter out "Checking..." lines
+         lines = [line for line in static_report.splitlines() if "Checking " not in line and line.strip() != ""]
+         issue_count = len(lines)
+
+    static_score = max(0, 20 - issue_count * 2.0)
 
     total = (
         design["score"]
@@ -41,4 +51,3 @@ DATA:
     raw_report["gemini_final_report"] = final_text if final_text else "Gemini API not configured."
 
     return raw_report
-
