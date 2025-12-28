@@ -4,3 +4,4 @@ google-generativeai
 reportlab
 langchain
 langchain-google-genai
+langchain-community
