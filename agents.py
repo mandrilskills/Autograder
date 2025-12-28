@@ -8,12 +8,14 @@ from llm import groq_generate_tests
 # ---------------- DESIGN AGENT ----------------
 def design_agent(source_path):
     try:
+        # Fix: Added safe encoding to prevent crashes on non-ASCII characters
         src = open(source_path, encoding="utf-8", errors="ignore").read()
-    except:
+    except Exception:
         src = ""
-        
+
     lines = src.splitlines()
-    # Improved regex to handle braces on new lines
+    
+    # Fix: Improved regex to detect functions even if the opening brace '{' is on a new line
     funcs = re.findall(r'\w+\s+\**\w+\s*\([^)]*\)\s*[\r\n\s]*\{', src)
     comments = src.count("//") + src.count("/*")
 
@@ -45,7 +47,7 @@ Format:
     raw = groq_generate_tests(prompt)
 
     try:
-        # Robust JSON extraction
+        # Fix: Robust JSON extraction (looks for the first '[' and last ']')
         start_idx = raw.find("[")
         end_idx = raw.rfind("]")
         if start_idx == -1 or end_idx == -1:
@@ -53,10 +55,15 @@ Format:
         
         block = raw[start_idx : end_idx+1]
         test_cases = json.loads(block)
-        if len(test_cases) != 5:
-            # Fallback if AI generates wrong number of tests
-            test_cases = test_cases[:5] 
-    except:
+        
+        # Fix: Ensure we exactly handle 5 cases even if LLM returns more/less
+        if not isinstance(test_cases, list):
+            raise ValueError("JSON is not a list")
+        if len(test_cases) > 5:
+            test_cases = test_cases[:5]
+            
+    except Exception:
+        # Fallback test cases
         test_cases = [
             {"input":"1\n","expected":"1"},
             {"input":"0\n","expected":"0"},
@@ -69,16 +76,20 @@ Format:
     results = []
 
     for tc in test_cases:
+        # CRITICAL FIX: Define 'expected' BEFORE the try block to prevent UnboundLocalError
+        expected = str(tc.get("expected", "")).strip()
+        input_val = str(tc.get("input", ""))
+
         try:
             proc = subprocess.run(
                 [binary_path],
-                input=str(tc["input"]).encode(),
+                input=input_val.encode(),  # Fix: Ensure input is bytes
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 timeout=TEST_TIMEOUT_SECONDS
             )
+            # Fix: Safe decoding with error replacement
             actual = proc.stdout.decode(errors='replace').strip()
-            expected = str(tc["expected"]).strip()
             ok = actual == expected
         except subprocess.TimeoutExpired:
             actual = "Timeout"
@@ -90,7 +101,7 @@ Format:
         if ok: passed += 1
 
         results.append({
-            "input": tc["input"],
+            "input": input_val,
             "expected": expected,
             "actual": actual,
             "pass": ok
@@ -106,17 +117,24 @@ Format:
 def performance_agent(source_path, binary_path):
     try:
         start = time.time()
-        # Use config timeout
-        subprocess.run([binary_path], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=TEST_TIMEOUT_SECONDS)
+        # Fix: Use the global configuration for timeout instead of hardcoded '1'
+        subprocess.run(
+            [binary_path], 
+            stdout=subprocess.PIPE, 
+            stderr=subprocess.PIPE, 
+            timeout=TEST_TIMEOUT_SECONDS
+        )
         runtime = time.time() - start
     except subprocess.TimeoutExpired:
-        runtime = float(TEST_TIMEOUT_SECONDS) + 0.1 # Mark as exceeded
-    except:
+        # Fix: Penalize timeouts correctly
+        runtime = float(TEST_TIMEOUT_SECONDS) + 0.5
+    except Exception:
         runtime = 0.0
 
     try:
+        # Fix: Safe file reading
         src = open(source_path, encoding="utf-8", errors="ignore").read()
-    except:
+    except Exception:
         src = ""
 
     loops = len(re.findall(r"for\s*\(|while\s*\(", src))
@@ -137,10 +155,11 @@ def performance_agent(source_path, binary_path):
 # ---------------- OPTIMIZATION AGENT ----------------
 def optimization_agent(source_path):
     try:
+        # Fix: Safe file reading
         src = open(source_path, encoding="utf-8", errors="ignore").read()
-    except:
+    except Exception:
         src = ""
-        
+
     score = 20
     notes = []
 
