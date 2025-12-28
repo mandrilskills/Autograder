@@ -4,8 +4,10 @@ Professional University-Grade C Autograder UI (FINAL PATCH)
 
 Features:
 ✅ Upload or paste C code
+✅ Mutual exclusion (paste OR upload)
+✅ Clear Code button
 ✅ Real gcc compilation
-✅ Case-1 Gemini 2.5 Flash (LangChain) error explanation + hints
+✅ Gemini 2.5 Flash compile-error explanation
 ✅ Groq LLM test generation
 ✅ Multi-agent grading
 ✅ cppcheck static analysis
@@ -13,8 +15,6 @@ Features:
 ✅ Live execution logs
 ✅ Gemini final report
 ✅ One-click PDF download
-
-COPY-PASTE READY FOR GITHUB ✅
 """
 
 import streamlit as st
@@ -35,16 +35,25 @@ st.set_page_config(
 if "code_content" not in st.session_state:
     st.session_state["code_content"] = ""
 
+if "uploaded_c_file" not in st.session_state:
+    st.session_state["uploaded_c_file"] = None
+
 # ---------------- CALLBACKS ----------------
 def handle_file_upload():
-    """Reads the uploaded file and populates the code text area."""
+    """Reads uploaded .c file and fills the code editor."""
     uploaded_file = st.session_state.get("uploaded_c_file")
     if uploaded_file is not None:
         try:
             content = uploaded_file.read().decode("utf-8")
-        except:
+        except UnicodeDecodeError:
             content = uploaded_file.read().decode("latin-1")
+
         st.session_state["code_content"] = content
+
+def clear_code():
+    """Clears code editor and resets uploader."""
+    st.session_state["code_content"] = ""
+    st.session_state["uploaded_c_file"] = None
 
 # ---------------- SIDEBAR (RUBRIC) ----------------
 with st.sidebar:
@@ -77,27 +86,30 @@ st.title("✅ Professional C Autograder System")
 st.caption("University-Ready | Hackathon-Grade | AI-Assisted (No Academic Dishonesty)")
 
 # ---------------- INPUT SECTION ----------------
-# We removed st.form to allow dynamic UI interactions
-
 title = st.text_input("📌 Program Title / Problem Description")
 
-# LOGIC: If the code area is empty, show the uploader. 
-# If it has content (pasted or uploaded), the uploader vanishes.
+# Upload button appears ONLY if code editor is empty
 if not st.session_state["code_content"].strip():
     st.file_uploader(
-        "OR Upload a .c Source File", 
-        type=["c"], 
+        "OR Upload a .c Source File",
+        type=["c"],
         key="uploaded_c_file",
         on_change=handle_file_upload
     )
 
+# Code editor (always visible)
 code_text = st.text_area(
-    "✍️ Paste Your C Code Here", 
+    "✍️ Paste Your C Code Here",
     height=320,
-    key="code_content"  # Binds this widget to session state
+    key="code_content"
 )
 
-submitted = st.button("🚀 Evaluate Code")
+# Action buttons
+col_a, col_b = st.columns([1, 1])
+with col_a:
+    submitted = st.button("🚀 Evaluate Code")
+with col_b:
+    st.button("🧹 Clear Code", on_click=clear_code)
 
 # ---------------- MAIN PIPELINE ----------------
 if submitted:
@@ -122,20 +134,23 @@ if submitted:
     with st.status("⚙️ Compiling with gcc...", expanded=True) as status:
         compile_result = compile_c_code(source_path)
 
-        # ✅ ✅ ✅ -------- CASE 1: COMPILATION FAILS (GEMINI VIA LANGCHAIN) --------
+        # ❌ Compilation failed → Gemini explanation
         if not compile_result["success"]:
             st.error("❌ Compilation Failed")
 
             st.subheader("🔴 Raw gcc Error Log")
             st.code(compile_result["errors"])
 
-            st.info("🧠 Sending error log to Gemini 2.5 Flash (LangChain) for explanation...")
-            ai_explanation = gemini_explain_compiler_errors(compile_result["errors"])
-
-            st.subheader("✅ Gemini AI Explanation & Correction Hints")
+            st.info("🧠 Gemini 2.5 Flash — Error Explanation & Hints")
+            ai_explanation = gemini_explain_compiler_errors(
+                compile_result["errors"]
+            )
             st.write(ai_explanation)
 
-            st.warning("⚠️ You must FIX the errors and RESUBMIT.\n\nThis system will **NOT auto-correct or generate full solutions.**")
+            st.warning(
+                "⚠️ Fix the errors and resubmit.\n\n"
+                "This system does NOT auto-correct or generate full code."
+            )
 
             os.unlink(source_path)
             status.update(label="❌ Compilation Failed", state="error")
@@ -168,20 +183,20 @@ if submitted:
         )
         status.update(label="✅ Agentic Evaluation Completed", state="complete")
 
-    # ---------- DASHBOARD DISPLAY ----------
+    # ---------- DASHBOARD ----------
     st.header("📊 Evaluation Dashboard")
 
     col1, col2, col3 = st.columns(3)
-    col1.metric("🏗️ Design Score", f"{final_report['design']['score']} / 15")
-    col2.metric("🧪 Test Score", f"{final_report['tests']['score']} / 30")
+    col1.metric("🏗️ Design", f"{final_report['design']['score']} / 15")
+    col2.metric("🧪 Tests", f"{final_report['tests']['score']} / 30")
     col3.metric("⚡ Performance", f"{final_report['performance']['score']} / 15")
 
     col4, col5, col6 = st.columns(3)
     col4.metric("🚀 Optimization", f"{final_report['optimization']['score']} / 20")
     col5.metric("🛡️ Static", f"{final_report['static_score']} / 20")
-    col6.metric("✅ TOTAL SCORE", f"{final_report['total_score']} / 100")
+    col6.metric("✅ TOTAL", f"{final_report['total_score']} / 100")
 
-    # ---------- TABBED AGENT REPORTS ----------
+    # ---------- TABS ----------
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "🏗️ Design",
         "🧪 Tests",
@@ -191,27 +206,22 @@ if submitted:
     ])
 
     with tab1:
-        st.subheader("Design Quality Report")
         st.write(final_report["design"]["report"])
 
     with tab2:
-        st.subheader("Functional Test Report (Groq Generated)")
         st.write(final_report["tests"]["report"])
         st.table(final_report["tests"]["cases"])
 
     with tab3:
-        st.subheader("Performance & Complexity")
         st.write(final_report["performance"]["report"])
 
     with tab4:
-        st.subheader("Optimization Suggestions")
         st.write(final_report["optimization"]["report"])
 
     with tab5:
-        st.subheader("Gemini 2.5 Flash — Final Academic Evaluation")
         st.write(final_report.get("gemini_final_report", "Gemini not configured."))
 
-    # ---------- PDF GENERATION ----------
+    # ---------- PDF ----------
     st.info("📄 Generating Final Academic PDF Report...")
     pdf_path = generate_pdf(final_report)
 
