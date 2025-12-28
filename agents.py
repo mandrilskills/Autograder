@@ -8,14 +8,12 @@ from llm import groq_generate_tests
 # ---------------- DESIGN AGENT ----------------
 def design_agent(source_path):
     try:
-        # Fix: Added safe encoding to prevent crashes on non-ASCII characters
         src = open(source_path, encoding="utf-8", errors="ignore").read()
     except Exception:
         src = ""
 
     lines = src.splitlines()
-    
-    # Fix: Improved regex to detect functions even if the opening brace '{' is on a new line
+    # Improved regex to handle braces on new lines
     funcs = re.findall(r'\w+\s+\**\w+\s*\([^)]*\)\s*[\r\n\s]*\{', src)
     comments = src.count("//") + src.count("/*")
 
@@ -47,7 +45,7 @@ Format:
     raw = groq_generate_tests(prompt)
 
     try:
-        # Fix: Robust JSON extraction (looks for the first '[' and last ']')
+        # Robust JSON extraction
         start_idx = raw.find("[")
         end_idx = raw.rfind("]")
         if start_idx == -1 or end_idx == -1:
@@ -56,14 +54,13 @@ Format:
         block = raw[start_idx : end_idx+1]
         test_cases = json.loads(block)
         
-        # Fix: Ensure we exactly handle 5 cases even if LLM returns more/less
         if not isinstance(test_cases, list):
-            raise ValueError("JSON is not a list")
+            raise ValueError("Result is not a list")
+            
+        # Ensure we don't process more than 5 if LLM hallucinations occur
         if len(test_cases) > 5:
             test_cases = test_cases[:5]
-            
     except Exception:
-        # Fallback test cases
         test_cases = [
             {"input":"1\n","expected":"1"},
             {"input":"0\n","expected":"0"},
@@ -76,19 +73,18 @@ Format:
     results = []
 
     for tc in test_cases:
-        # CRITICAL FIX: Define 'expected' BEFORE the try block to prevent UnboundLocalError
-        expected = str(tc.get("expected", "")).strip()
+        # FIX: Define 'expected' BEFORE the try block to prevent UnboundLocalError
+        expected = str(tc.get("expected", "Unknown")).strip()
         input_val = str(tc.get("input", ""))
 
         try:
             proc = subprocess.run(
                 [binary_path],
-                input=input_val.encode(),  # Fix: Ensure input is bytes
+                input=input_val.encode(), # Ensure input is bytes
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 timeout=TEST_TIMEOUT_SECONDS
             )
-            # Fix: Safe decoding with error replacement
             actual = proc.stdout.decode(errors='replace').strip()
             ok = actual == expected
         except subprocess.TimeoutExpired:
@@ -117,7 +113,7 @@ Format:
 def performance_agent(source_path, binary_path):
     try:
         start = time.time()
-        # Fix: Use the global configuration for timeout instead of hardcoded '1'
+        # FIX: Use configured timeout, not hardcoded 1s
         subprocess.run(
             [binary_path], 
             stdout=subprocess.PIPE, 
@@ -126,13 +122,11 @@ def performance_agent(source_path, binary_path):
         )
         runtime = time.time() - start
     except subprocess.TimeoutExpired:
-        # Fix: Penalize timeouts correctly
-        runtime = float(TEST_TIMEOUT_SECONDS) + 0.5
+        runtime = float(TEST_TIMEOUT_SECONDS) + 0.5 # Penalize timeout
     except Exception:
         runtime = 0.0
 
     try:
-        # Fix: Safe file reading
         src = open(source_path, encoding="utf-8", errors="ignore").read()
     except Exception:
         src = ""
@@ -155,7 +149,6 @@ def performance_agent(source_path, binary_path):
 # ---------------- OPTIMIZATION AGENT ----------------
 def optimization_agent(source_path):
     try:
-        # Fix: Safe file reading
         src = open(source_path, encoding="utf-8", errors="ignore").read()
     except Exception:
         src = ""
