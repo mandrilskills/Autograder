@@ -35,17 +35,6 @@ st.set_page_config(
 if "code_content" not in st.session_state:
     st.session_state["code_content"] = ""
 
-# ---------------- CALLBACKS ----------------
-def handle_file_upload():
-    """Reads the uploaded file and populates the code text area."""
-    uploaded_file = st.session_state.get("uploaded_c_file")
-    if uploaded_file is not None:
-        try:
-            content = uploaded_file.read().decode("utf-8")
-        except:
-            content = uploaded_file.read().decode("latin-1")
-        st.session_state["code_content"] = content
-
 # ---------------- SIDEBAR (RUBRIC) ----------------
 with st.sidebar:
     st.title("📊 Evaluation Rubric")
@@ -77,24 +66,33 @@ st.title("✅ Professional C Autograder System")
 st.caption("University-Ready | Hackathon-Grade | AI-Assisted (No Academic Dishonesty)")
 
 # ---------------- INPUT SECTION ----------------
-# We removed st.form to allow dynamic UI interactions
-
 title = st.text_input("📌 Program Title / Problem Description")
 
-# LOGIC: If the code area is empty, show the uploader. 
-# If it has content (pasted or uploaded), the uploader vanishes.
+# LOGIC: Show File Uploader ONLY if the text area is empty
+# We handle the file read inline (no callback) to prevent Streamlit state errors
 if not st.session_state["code_content"].strip():
-    st.file_uploader(
+    uploaded_file = st.file_uploader(
         "OR Upload a .c Source File", 
         type=["c"], 
-        key="uploaded_c_file",
-        on_change=handle_file_upload
+        key="uploaded_c_file"
     )
+    
+    # If a file is uploaded, read it, update state, and rerun immediately
+    if uploaded_file is not None:
+        try:
+            content = uploaded_file.read().decode("utf-8")
+        except:
+            content = uploaded_file.read().decode("latin-1")
+            
+        st.session_state["code_content"] = content
+        st.rerun()
 
+# Text Area is bound to session state. 
+# It will automatically populate if a file was uploaded above.
 code_text = st.text_area(
     "✍️ Paste Your C Code Here", 
     height=320,
-    key="code_content"  # Binds this widget to session state
+    key="code_content"
 )
 
 submitted = st.button("🚀 Evaluate Code")
