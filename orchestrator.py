@@ -42,7 +42,7 @@ def run_orchestration(title, source_c, binary, static_report):
     # ✅ FINAL REPORT BY GEMINI 2.5 FLASH
     prompt = f"""
 Generate a professional university-grade evaluation report using this data.
-No JSON. Human readable format.
+No JSON. Human written tone. No complex languages. No over explanation. No unnecessary information. No jargon included. Simple yet elaborative.
 
 DATA:
 {raw_report}
