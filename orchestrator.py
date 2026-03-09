@@ -43,6 +43,7 @@ def run_orchestration(title, source_c, binary, static_report):
     prompt = f"""
 Generate a professional university-grade evaluation report using this data.
 No JSON. Human written tone. No complex languages. No over explanation. No unnecessary information. No jargon included. Simple yet elaborative.
+The marks should be mentioned properly. And the reason behind marks deduction should also be mentioned to the student & academician.
 
 DATA:
 {raw_report}
