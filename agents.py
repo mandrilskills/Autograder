@@ -208,39 +208,45 @@ Example format (for a program that reads one integer):
 
     for idx, raw_input in enumerate(inputs):
 
-        # Normalise: always end with newline
+        # Normalise: always end with newline for subprocess stdin
         if not raw_input.endswith("\n"):
             raw_input += "\n"
+
+        # Build a human-readable version of the input for display:
+        #   - Keep literal \n characters visible as the text "↵" so multi-line
+        #     inputs like "Alice\n25\n" are shown as "Alice↵ 25↵" in the UI
+        #     instead of being collapsed or stripped to a blank line.
+        #   - The raw_input itself is always passed to the binary unchanged.
+        display_input = raw_input.replace("\n", " ↵\n").rstrip()
 
         # ── Oracle run: program defines the expected output ───────────────────
         expected, oracle_err = _run_binary(binary_path, raw_input)
 
         if oracle_err:
-            # Binary failed on oracle run — cannot establish ground truth
             logger.warning(
                 f"test_agent: Oracle run {idx + 1} failed ({oracle_err}). "
                 "Marking as not-passed."
             )
             results.append({
-                "input":    raw_input.strip(),
-                "expected": f"[Oracle Error: {oracle_err}]",
-                "actual":   oracle_err,
-                "pass":     False
+                "input":         display_input,
+                "input_raw":     raw_input,
+                "expected":      f"[Oracle Error: {oracle_err}]",
+                "actual":        oracle_err,
+                "pass":          False
             })
             continue
 
         if not expected:
-            # Program produced no output — could be infinite loop eating input,
-            # or a program that only reads and doesn't print anything useful.
             logger.warning(
                 f"test_agent: Oracle run {idx + 1} produced empty output. "
                 "Skipping — cannot use empty string as ground truth."
             )
             results.append({
-                "input":    raw_input.strip(),
-                "expected": "[Empty — no output produced]",
-                "actual":   "",
-                "pass":     False
+                "input":         display_input,
+                "input_raw":     raw_input,
+                "expected":      "[Empty — no output produced]",
+                "actual":        "",
+                "pass":          False
             })
             continue
 
@@ -248,7 +254,7 @@ Example format (for a program that reads one integer):
         actual, confirm_err = _run_binary(binary_path, raw_input)
 
         if confirm_err:
-            ok = False
+            ok     = False
             actual = confirm_err
             logger.warning(f"test_agent: Confirm run {idx + 1} failed ({confirm_err}).")
         else:
@@ -263,10 +269,11 @@ Example format (for a program that reads one integer):
             )
 
         results.append({
-            "input":    raw_input.strip(),
-            "expected": expected,
-            "actual":   actual,
-            "pass":     ok
+            "input":         display_input,   # human-readable with ↵ markers
+            "input_raw":     raw_input,        # exact bytes sent to binary
+            "expected":      expected,
+            "actual":        actual,
+            "pass":          ok
         })
 
     score = round((passed / 5) * 30, 2)
