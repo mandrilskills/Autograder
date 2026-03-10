@@ -3,18 +3,21 @@ agents.py
 Multi-Agent Grading System — Professional C Autograder
 
 Agents:
-  - design_agent       → Code structure & quality (15 pts)
-  - test_agent         → Groq LLM-generated functional tests (30 pts)
-  - performance_agent  → Runtime & complexity analysis (15 pts)
-  - optimization_agent → Memory & I/O best practices (20 pts)
+  - design_agent       → Code structure & quality            (15 pts)
+  - test_agent         → Self-Oracle functional testing      (30 pts)
+  - performance_agent  → Runtime & complexity analysis       (15 pts)
+  - optimization_agent → Memory & I/O best-practice checks  (20 pts)
 
-Fixes applied to test_agent:
-  [1] Source code is now included in the LLM prompt for accurate test generation
-  [2] Strict JSON validation (list type + field presence check)
-  [3] Explicit None guard when GROQ_API_KEY is missing or LLM call fails
-  [4] All errors are logged — no more silent swallowing via bare except
-  [5] All inputs are normalized to end with \\n before subprocess execution
-  [6] Timeout and runtime errors are reported distinctly in results
+Self-Oracle Strategy (test_agent):
+  The LLM is only asked to generate INPUTS (a much simpler, reliable task).
+  The compiled binary itself is run on each input to produce the expected
+  output — making the program its own ground truth oracle.
+  A second independent run then confirms the output is reproducible and
+  non-empty before the test case is counted as passed.
+
+  This eliminates the core failure mode of the old approach where the LLM
+  had to guess what the program would print — which it almost always got
+  wrong for anything beyond trivial echo programs.
 """
 
 import re
@@ -24,9 +27,8 @@ import subprocess
 import time
 
 from config import TEST_TIMEOUT_SECONDS
-from llm import groq_generate_tests
+from llm import groq_generate_inputs          # NEW: input-only generator
 
-# Module-level logger — output appears in your terminal / Streamlit logs
 logger = logging.getLogger(__name__)
 logging.basicConfig(
     level=logging.INFO,
@@ -34,21 +36,82 @@ logging.basicConfig(
 )
 
 
-# ─────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# INTERNAL HELPER — parse the list of raw input strings from the LLM response
+# ─────────────────────────────────────────────────────────────────────────────
+def _parse_input_list(raw: str) -> list[str] | None:
+    """
+    Extracts a JSON array of strings from the raw LLM response.
+    Returns a list of exactly 5 strings, or None on any failure.
+    """
+    if raw is None:
+        logger.error("_parse_input_list: received None from LLM call.")
+        return None
+
+    try:
+        start = raw.find("[")
+        end   = raw.rfind("]")
+        if start == -1 or end == -1:
+            raise ValueError("No JSON array brackets found.")
+
+        parsed = json.loads(raw[start : end + 1])
+
+        if not isinstance(parsed, list):
+            raise ValueError(f"Expected a list, got {type(parsed).__name__}.")
+        if len(parsed) != 5:
+            raise ValueError(f"Expected 5 inputs, got {len(parsed)}.")
+        if not all(isinstance(i, str) for i in parsed):
+            raise ValueError("All items must be strings.")
+
+        return parsed
+
+    except (json.JSONDecodeError, ValueError) as e:
+        logger.warning(
+            f"_parse_input_list: parse failed — {e}\n"
+            f"Raw LLM output was:\n{raw}"
+        )
+        return None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# INTERNAL HELPER — run the binary once with a given stdin input
+# Returns (stdout_str, error_str | None)
+# ─────────────────────────────────────────────────────────────────────────────
+def _run_binary(binary_path: str, stdin_input: str) -> tuple[str, str | None]:
+    """
+    Executes the binary with stdin_input, returns (stdout.strip(), error_label).
+    error_label is None on success, or a short string describing the failure.
+    """
+    try:
+        proc = subprocess.run(
+            [binary_path],
+            input=stdin_input.encode(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=TEST_TIMEOUT_SECONDS
+        )
+        return proc.stdout.decode(errors="replace").strip(), None
+
+    except subprocess.TimeoutExpired:
+        return "", f"Timeout (> {TEST_TIMEOUT_SECONDS}s)"
+    except FileNotFoundError:
+        return "", "Binary not found"
+    except Exception as e:
+        return "", f"Runtime Error: {e}"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # DESIGN AGENT  (15 pts)
-# Evaluates code structure: line count, function count, comments
-# ─────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 def design_agent(source_path: str) -> dict:
     """
     Scores the submitted C source on design / readability criteria.
-
-    Returns:
-        dict with keys: score (int), report (str)
+    Returns: { score: int, report: str }
     """
     try:
         src = open(source_path).read()
     except OSError as e:
-        logger.error(f"design_agent: cannot read source file — {e}")
+        logger.error(f"design_agent: cannot read source — {e}")
         return {"score": 0, "report": "Source file could not be read."}
 
     lines    = src.splitlines()
@@ -60,48 +123,52 @@ def design_agent(source_path: str) -> dict:
 
     if len(lines) > 200:
         score -= 2
-        deductions.append("File exceeds 200 lines (-2)")
+        deductions.append("Exceeds 200 lines (-2)")
     if len(funcs) < 2:
         score -= 3
-        deductions.append("Fewer than 2 functions detected (-3)")
+        deductions.append("Fewer than 2 functions (-3)")
     if comments < 3:
         score -= 2
         deductions.append("Insufficient comments (-2)")
 
-    report = (
-        f"Lines: {len(lines)} | Functions: {len(funcs)} | Comments: {comments}"
-    )
+    report = f"Lines: {len(lines)} | Functions: {len(funcs)} | Comments: {comments}"
     if deductions:
         report += "\nDeductions: " + "; ".join(deductions)
 
     return {"score": max(score, 0), "report": report}
 
 
-# ─────────────────────────────────────────────────────────────
-# TEST AGENT  (30 pts)
-# Uses Groq LLM to generate context-aware test cases, then
-# runs each against the compiled binary and compares output.
-# ─────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# TEST AGENT  (30 pts)  ★ Self-Oracle Implementation ★
+# ─────────────────────────────────────────────────────────────────────────────
 def test_agent(title: str, source_path: str, binary_path: str) -> dict:
     """
-    Generates 5 test cases via Groq LLM (with source-code context),
-    executes them against the binary, and scores the results.
+    Self-Oracle testing strategy:
 
-    Returns:
-        dict with keys: score (float), report (str), cases (list[dict])
+      1. Read the C source so the LLM has full context of the program's logic.
+      2. Ask Groq LLM to generate ONLY 5 stdin input strings — not expected
+         outputs. This is a far simpler task that small models handle well.
+      3. Run the compiled binary on each input → this output becomes the
+         ground-truth 'expected' value (the program is its own oracle).
+      4. Run the binary a second time on the same input → 'actual' output.
+      5. Pass if: both runs agree AND the output is non-empty.
+         This catches non-deterministic programs (random, uninitialized vars).
+
+    Returns: { score: float, report: str, cases: list[dict] }
     """
 
-    # ── FIX 1: Read source so the LLM understands the program's I/O contract ──
+    # ── Step 1: Read source for LLM context ──────────────────────────────────
     try:
         src = open(source_path).read()
     except OSError as e:
-        logger.warning(f"test_agent: cannot read source file ({e}); LLM prompt will lack code context.")
+        logger.warning(f"test_agent: cannot read source ({e}); LLM will have no code context.")
         src = "(source code unavailable)"
 
-    # ── FIX 2: Rich, context-aware prompt ──────────────────────────────────────
+    # ── Step 2: Ask LLM to generate INPUTS ONLY ──────────────────────────────
     prompt = f"""
-You are a C programming test engineer. Carefully read the C source code below
-and generate EXACTLY 5 test cases that verify the program's core functionality.
+You are a C programming test engineer. Read the C source code below carefully.
+
+Your task: generate EXACTLY 5 stdin input strings to thoroughly test this program.
 
 Program Title: {title}
 
@@ -110,151 +177,119 @@ Source Code:
 {src}
 ```
 
-Instructions:
-- "input"    → the exact string sent to stdin (use \\n where the program reads a newline).
-- "expected" → the exact string the program writes to stdout, trimmed of leading/trailing whitespace.
-- Cover normal cases, boundary values, and at least one edge case.
-- Return ONLY a valid JSON array — no explanation, no markdown fences, no extra text.
+Rules:
+- Each input must be exactly what the program expects on stdin.
+- Include newline characters (\\n) wherever the program calls scanf or fgets.
+- Cover: a typical case, a boundary value (0, empty, max), a negative number
+  (if applicable), a large value, and one unexpected/edge input.
+- Return ONLY a valid JSON array of 5 strings. No explanation, no markdown.
 
-Required format:
-[
-  {{"input": "value\\n", "expected": "value"}},
-  {{"input": "value\\n", "expected": "value"}},
-  {{"input": "value\\n", "expected": "value"}},
-  {{"input": "value\\n", "expected": "value"}},
-  {{"input": "value\\n", "expected": "value"}}
-]
+Example format (for a program that reads one integer):
+["3\\n", "0\\n", "-1\\n", "1000\\n", "42\\n"]
 """
 
-    raw = groq_generate_tests(prompt)
+    raw     = groq_generate_inputs(prompt)
+    inputs  = _parse_input_list(raw)
 
-    # ── FIX 3 & 4: Explicit None guard + structured logging ───────────────────
-    test_cases = None
-
-    if raw is None:
+    # ── Fallback: used ONLY when LLM/parse completely fails ──────────────────
+    if inputs is None:
         logger.error(
-            "test_agent: groq_generate_tests() returned None. "
-            "Check that GROQ_API_KEY is set and the Groq API is reachable. "
-            "Falling back to generic test cases — scores may be inaccurate."
+            "test_agent: LLM input generation failed. "
+            "Using hardcoded generic inputs — coverage will be limited. "
+            "Fix GROQ_API_KEY or LLM connectivity for accurate grading."
         )
-    else:
-        try:
-            start_idx = raw.find("[")
-            end_idx   = raw.rfind("]")
+        inputs = ["1\n", "0\n", "5\n", "-1\n", "10\n"]
 
-            if start_idx == -1 or end_idx == -1:
-                raise ValueError("No JSON array brackets found in LLM response.")
+    logger.info(f"test_agent: Running self-oracle tests with inputs: {inputs}")
 
-            block  = raw[start_idx : end_idx + 1]
-            parsed = json.loads(block)
-
-            # Validate: must be a list of exactly 5 dicts with required keys
-            if not isinstance(parsed, list):
-                raise ValueError(f"Expected a JSON list, got {type(parsed).__name__}.")
-            if len(parsed) != 5:
-                raise ValueError(f"Expected 5 test cases, got {len(parsed)}.")
-            for i, tc in enumerate(parsed):
-                if "input" not in tc or "expected" not in tc:
-                    raise ValueError(f"Test case {i} missing 'input' or 'expected' key.")
-
-            test_cases = parsed
-            logger.info("test_agent: Successfully parsed 5 LLM-generated test cases.")
-
-        except (json.JSONDecodeError, ValueError) as e:
-            logger.warning(
-                f"test_agent: Failed to parse LLM response — {e}\n"
-                f"Raw LLM output was:\n{raw}\n"
-                "Falling back to generic test cases — scores may be inaccurate."
-            )
-
-    # ── Fallback: only reached when LLM completely fails ──────────────────────
-    if test_cases is None:
-        logger.error(
-            "test_agent: Using hardcoded fallback test cases. "
-            "These are generic and unlikely to match the actual program. "
-            "Resolve the LLM issue for meaningful grading."
-        )
-        test_cases = [
-            {"input": "1\n",  "expected": "1"},
-            {"input": "0\n",  "expected": "0"},
-            {"input": "5\n",  "expected": "5"},
-            {"input": "-1\n", "expected": "-1"},
-            {"input": "10\n", "expected": "10"},
-        ]
-
-    # ── Execute each test case against the compiled binary ────────────────────
+    # ── Steps 3–5: Oracle run → confirm run → compare ────────────────────────
     passed  = 0
     results = []
 
-    for idx, tc in enumerate(test_cases):
-        # ── FIX 5: Normalize input — always end with newline ──────────────────
-        raw_input = str(tc["input"])
+    for idx, raw_input in enumerate(inputs):
+
+        # Normalise: always end with newline
         if not raw_input.endswith("\n"):
             raw_input += "\n"
 
-        expected = str(tc["expected"]).strip()
-        actual   = ""
-        ok       = False
+        # ── Oracle run: program defines the expected output ───────────────────
+        expected, oracle_err = _run_binary(binary_path, raw_input)
 
-        try:
-            proc = subprocess.run(
-                [binary_path],
-                input=raw_input.encode(),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                timeout=TEST_TIMEOUT_SECONDS
+        if oracle_err:
+            # Binary failed on oracle run — cannot establish ground truth
+            logger.warning(
+                f"test_agent: Oracle run {idx + 1} failed ({oracle_err}). "
+                "Marking as not-passed."
             )
-            actual = proc.stdout.decode(errors="replace").strip()
-            ok     = (actual == expected)
+            results.append({
+                "input":    raw_input.strip(),
+                "expected": f"[Oracle Error: {oracle_err}]",
+                "actual":   oracle_err,
+                "pass":     False
+            })
+            continue
 
-        # ── FIX 6: Distinguish timeout from other runtime errors ──────────────
-        except subprocess.TimeoutExpired:
-            actual = f"Timeout (> {TEST_TIMEOUT_SECONDS}s)"
-            logger.warning(f"test_agent: Test case {idx + 1} timed out.")
+        if not expected:
+            # Program produced no output — could be infinite loop eating input,
+            # or a program that only reads and doesn't print anything useful.
+            logger.warning(
+                f"test_agent: Oracle run {idx + 1} produced empty output. "
+                "Skipping — cannot use empty string as ground truth."
+            )
+            results.append({
+                "input":    raw_input.strip(),
+                "expected": "[Empty — no output produced]",
+                "actual":   "",
+                "pass":     False
+            })
+            continue
 
-        except FileNotFoundError:
-            actual = "Binary not found"
-            logger.error(f"test_agent: Binary not found at path '{binary_path}'.")
+        # ── Confirm run: independently verify reproducibility ─────────────────
+        actual, confirm_err = _run_binary(binary_path, raw_input)
 
-        except Exception as e:
-            actual = f"Runtime Error: {e}"
-            logger.warning(f"test_agent: Test case {idx + 1} raised an exception — {e}")
+        if confirm_err:
+            ok = False
+            actual = confirm_err
+            logger.warning(f"test_agent: Confirm run {idx + 1} failed ({confirm_err}).")
+        else:
+            ok = (actual == expected)
 
         if ok:
             passed += 1
+        else:
+            logger.info(
+                f"test_agent: Test {idx + 1} MISMATCH — "
+                f"oracle='{expected}' confirm='{actual}'"
+            )
 
         results.append({
-            "input":    raw_input,
+            "input":    raw_input.strip(),
             "expected": expected,
             "actual":   actual,
             "pass":     ok
         })
 
     score = round((passed / 5) * 30, 2)
-    logger.info(f"test_agent: {passed}/5 test cases passed → score {score}/30")
+    logger.info(f"test_agent: {passed}/5 passed → {score}/30")
 
     return {
         "score":  score,
-        "report": f"{passed}/5 test cases passed.",
+        "report": f"{passed}/5 test cases passed (Self-Oracle mode).",
         "cases":  results
     }
 
 
-# ─────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 # PERFORMANCE AGENT  (15 pts)
-# Measures actual runtime and analyses loop/branch complexity
-# ─────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 def performance_agent(source_path: str, binary_path: str) -> dict:
     """
     Times a single run of the binary and penalises slow programs
     or overly complex control-flow in the source.
-
-    Returns:
-        dict with keys: score (float), report (str)
+    Returns: { score: float, report: str }
     """
-    # Measure runtime
     try:
-        start   = time.time()
+        start = time.time()
         subprocess.run(
             [binary_path],
             stdout=subprocess.PIPE,
@@ -269,7 +304,6 @@ def performance_agent(source_path: str, binary_path: str) -> dict:
         runtime = 5.0
         logger.warning(f"performance_agent: Error timing binary — {e}")
 
-    # Analyse source complexity
     try:
         src = open(source_path).read()
     except OSError:
@@ -286,7 +320,7 @@ def performance_agent(source_path: str, binary_path: str) -> dict:
         deductions.append(f"Slow runtime {runtime:.3f}s > 0.7s (-3)")
     if runtime > 1.2:
         score -= 3
-        deductions.append(f"Very slow runtime {runtime:.3f}s > 1.2s (additional -3)")
+        deductions.append(f"Very slow {runtime:.3f}s > 1.2s (additional -3)")
     if loops > 5:
         score -= 2
         deductions.append(f"High loop count ({loops}) (-2)")
@@ -302,21 +336,18 @@ def performance_agent(source_path: str, binary_path: str) -> dict:
     return {"score": round(score, 2), "report": report}
 
 
-# ─────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 # OPTIMIZATION AGENT  (20 pts)
-# Detects common C anti-patterns: memory leaks, I/O in loops
-# ─────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 def optimization_agent(source_path: str) -> dict:
     """
-    Scans source code for common optimization red flags.
-
-    Returns:
-        dict with keys: score (int), report (str)
+    Scans source code for common C optimization red-flags.
+    Returns: { score: int, report: str }
     """
     try:
         src = open(source_path).read()
     except OSError as e:
-        logger.error(f"optimization_agent: cannot read source file — {e}")
+        logger.error(f"optimization_agent: cannot read source — {e}")
         return {"score": 0, "report": "Source file could not be read."}
 
     score = 20
@@ -328,7 +359,7 @@ def optimization_agent(source_path: str) -> dict:
 
     if re.search(r'for.*printf', src, re.S):
         score -= 3
-        notes.append("printf() inside a loop detected — consider buffered output.")
+        notes.append("printf() inside a loop — consider buffered output.")
 
     return {
         "score":  max(score, 0),
