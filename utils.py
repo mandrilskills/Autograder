@@ -249,45 +249,79 @@ def generate_pdf(report: dict, student_name: str = "") -> str:
     # ── Helper: clean Gemini markdown into ReportLab paragraphs ──────────────
     def render_gemini_report(raw_text: str) -> list:
         """
-        Converts the Gemini markdown report into a list of Paragraph flowables.
-        Handles **bold**, bullet points, numbered lists, and plain lines.
+        Converts the Gemini markdown report into ReportLab Paragraph flowables.
+        - Strips all markdown symbols (#, **, ##, ###)
+        - Skips boilerplate placeholder lines (Course Code, Evaluator, Date, etc.)
+        - Handles bullet points and numbered section headings cleanly
         """
         if not raw_text or raw_text.strip() in ("Not available.", "Gemini API not configured."):
             return [Paragraph("Gemini report not available.", sBody)]
+
+        # Patterns for lines that should be silently dropped
+        SKIP_PATTERNS = [
+            r'\[Insert', r'\[Student', r'\[Evaluator', r'\[Your',
+            r'Course Code:', r'Course:', r'Student Name:', r'Student ID:',
+            r'Project Title:', r'Evaluator:', r'Date:',
+            r'\[Insert Course', r'\[Insert Project',
+        ]
+        skip_re = re.compile('|'.join(SKIP_PATTERNS), re.IGNORECASE)
 
         elements_out = []
         lines = raw_text.split("\n")
 
         for line in lines:
             stripped = line.strip()
+
+            # Blank line → small spacer
             if not stripped:
                 elements_out.append(Spacer(1, 4))
                 continue
 
-            # Section headings: lines starting with ** and ending with **
+            # Skip boilerplate placeholder lines entirely
+            if skip_re.search(stripped):
+                continue
+
+            # Skip pure horizontal rules
+            if re.match(r'^[-*_]{3,}$', stripped):
+                continue
+
+            # Strip leading markdown heading markers (###, ##, #)
+            stripped = re.sub(r'^#{1,6}\s*', '', stripped).strip()
+            if not stripped:
+                continue
+
+            # Numbered section heading: "1. Design" / "#### 1. Design"
+            if re.match(r'^\d+[\.)]', stripped):
+                clean = re.sub(r'^\d+[\.)]\s*', '', stripped)
+                # Remove any remaining ** markers
+                clean = re.sub(r'\*\*(.*?)\*\*', r'\1', clean).strip()
+                if clean:
+                    elements_out.append(Spacer(1, 6))
+                    elements_out.append(Paragraph(clean, sGeminiBold))
+                continue
+
+            # Bold-only line (section title like **Design (Score: 10 / 15)**)
             if stripped.startswith("**") and stripped.endswith("**") and len(stripped) > 4:
                 clean = stripped.strip("*").strip()
-                elements_out.append(Paragraph(clean, sGeminiBold))
+                if clean:
+                    elements_out.append(Spacer(1, 4))
+                    elements_out.append(Paragraph(clean, sGeminiBold))
                 continue
 
-            # Bullet points
+            # Bullet point lines
             if stripped.startswith(("* ", "- ", "• ")):
                 clean = stripped[2:].strip()
+                # Replace inline **bold** with <b> tags, strip remaining *
                 clean = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', clean)
-                elements_out.append(
-                    Paragraph(f"&nbsp;&nbsp;• {clean}", sGemini)
-                )
+                clean = re.sub(r'`(.*?)`', r'<i>\1</i>', clean)
+                if clean:
+                    elements_out.append(Paragraph(f"&nbsp;&nbsp;&nbsp;• {clean}", sGemini))
                 continue
 
-            # Numbered list items
-            if re.match(r'^\d+[\.\)]\s', stripped):
-                clean = re.sub(r'^\d+[\.\)]\s', '', stripped)
-                clean = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', clean)
-                elements_out.append(Paragraph(clean, sGeminiBold))
-                continue
-
-            # Plain line — replace inline **bold**
+            # Plain body line — clean up all markdown artifacts
             clean = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', stripped)
+            clean = re.sub(r'`(.*?)`', r'<i>\1</i>', clean)
+            clean = re.sub(r'\*', '', clean)          # stray asterisks
             clean = clean.replace("---", "").strip()
             if clean:
                 elements_out.append(Paragraph(clean, sGemini))
@@ -627,7 +661,7 @@ def generate_pdf(report: dict, student_name: str = "") -> str:
     # SECTION 6 — GEMINI FINAL REPORT  (new page for breathing room)
     # ═══════════════════════════════════════════════════════════════════════════
     E.append(PageBreak())
-    E.append(section_header("6. FINAL ACADEMIC EVALUATION"))
+    E.append(section_header("6.  FINAL ACADEMIC EVALUATION"))
 
     gemini_raw = report.get("gemini_final_report", "")
     for flowable in render_gemini_report(gemini_raw):
@@ -642,7 +676,6 @@ def generate_pdf(report: dict, student_name: str = "") -> str:
     E.append(Paragraph(
         f"Professional C Autograder System  •  "
         f"Self-Oracle Test Mode  •  "
-        f"Powered by Groq LLM & Gemini 2.5 Flash  •  "
         f"{datetime.datetime.now().strftime('%d %b %Y')}",
         sFooter
     ))
