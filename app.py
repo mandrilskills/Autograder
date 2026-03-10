@@ -74,10 +74,11 @@ st.caption("University-Ready | Hackathon-Grade | AI-Assisted (Self-Oracle Test M
 
 # ── Input form ────────────────────────────────────────────────────────────────
 with st.form("submission_form"):
-    title      = st.text_input("📌 Program Title / Problem Description")
-    code_text  = st.text_area("✍️ Paste Your C Code Here", height=320)
-    uploaded   = st.file_uploader("OR Upload a .c Source File", type=["c"])
-    submitted  = st.form_submit_button("🚀 Evaluate Code")
+    student_name = st.text_input("🎓 Student Name", placeholder="e.g. Rahul Sharma")
+    title        = st.text_input("📌 Program Title / Problem Description")
+    code_text    = st.text_area("✍️ Paste Your C Code Here", height=320)
+    uploaded     = st.file_uploader("OR Upload a .c Source File", type=["c"])
+    submitted    = st.form_submit_button("🚀 Evaluate Code")
 
 # ── Main pipeline ─────────────────────────────────────────────────────────────
 if submitted:
@@ -162,6 +163,8 @@ if submitted:
 
     # ── Score dashboard ───────────────────────────────────────────────────────
     st.header("📊 Evaluation Dashboard")
+    if student_name.strip():
+        st.markdown(f"**🎓 Student:** {student_name.strip()}")
 
     col1, col2, col3 = st.columns(3)
     col1.metric("🏗️ Design Score",  f"{final_report['design']['score']} / 15")
@@ -262,7 +265,7 @@ if submitted:
 
     # ── PDF download ──────────────────────────────────────────────────────────
     st.info("📄 Generating Final Academic PDF Report...")
-    pdf_path = generate_pdf(final_report)
+    pdf_path = generate_pdf(final_report, student_name=student_name.strip())
 
     with open(pdf_path, "rb") as f:
         st.download_button(
