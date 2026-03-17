@@ -226,45 +226,47 @@ if submitted:
 
             for i, c in enumerate(cases, 1):
                 icon   = "✅" if c["pass"] else "❌"
+                
                 # Show a clean preview in the expander title
-                title_preview = c["input"].replace(" ↵\n", " | ").replace("↵", "").strip()
+                title_preview = c.get("input_raw", c["input"]).replace("\n", " | ").strip()
+                if title_preview.endswith("|"): 
+                    title_preview = title_preview[:-1].strip()
                 if len(title_preview) > 40:
                     title_preview = title_preview[:40] + "…"
                 header = f"{icon} Test {i} — Input: `{title_preview}`"
 
                 with st.expander(header, expanded=not c["pass"]):
 
-                    # ── Generated Input ─────────────────────
-                    st.markdown("**⚙️ Generated Input (sent to stdin):**")
+                    # ── 1. Clean Input View ─────────────────────
+                    st.markdown("**📥 Standard Input (stdin):**")
+                    clean_input = c.get("input_raw", c["input"]).strip()
+                    st.code(clean_input, language="text")
 
-                    raw_lines = c.get("input_raw", c["input"]).split("\n")
-                    raw_lines = [l for l in raw_lines if l != ""]
-
-                    if len(raw_lines) == 1:
-                        st.code(raw_lines[0], language=None)
-                    else:
-                        st.markdown("*Multiple values (one per stdin read):*")
-                        for ln_idx, line in enumerate(raw_lines, 1):
-                            st.code(f"Read {ln_idx}: {line}", language=None)
-
-                    raw_repr = c.get("input_raw", c["input"]).replace("\n", "\\n").replace("\t", "\\t")
-                    st.caption(f"Raw stdin bytes: `{raw_repr}`")
-
-                    st.divider()
-
-                    # ── Oracle output vs Confirm run output ───────────────────
-                    col_a, col_b = st.columns(2)
-                    col_a.markdown("**📌 Expected Output (Oracle run):**")
-                    col_a.code(c["expected"], language=None)
-
-                    col_b.markdown("**🖥️ Actual Output (Confirm run):**")
-                    col_b.code(c["actual"], language=None)
-
-                    # ── Pass / Fail verdict ───────────────────────────────────
+                    # ── 2. Clean Output View ────────────────────
                     if c["pass"]:
-                        st.success("✅ PASS — Both runs produced identical, non-empty output.")
+                        st.markdown("**🖥️ Program Output (stdout):**")
+                        output_display = c["actual"] if c["actual"].strip() else "(No output printed)"
+                        st.code(output_display, language="text")
+                        st.success("✅ PASS")
                     else:
-                        st.error("❌ FAIL — Output mismatch or execution error between runs.")
+                        if "Empty" in c["expected"]:
+                            st.markdown("**🖥️ Program Output (stdout):**")
+                            st.code("(No output printed to terminal)", language="text")
+                            st.error("❌ FAIL — Program produced empty output.")
+                            
+                        elif "Error" in c["expected"] or "Error" in c["actual"]:
+                            st.markdown("**🖥️ Execution Error:**")
+                            st.code(c["actual"] if c["actual"] else c["expected"], language="text")
+                            st.error("❌ FAIL — Program crashed or timed out.")
+                            
+                        else:
+                            st.warning("⚠️ Unstable Output! The program printed different results on consecutive runs with the same input.")
+                            col_a, col_b = st.columns(2)
+                            col_a.markdown("**Run 1:**")
+                            col_a.code(c["expected"], language="text")
+                            col_b.markdown("**Run 2:**")
+                            col_b.code(c["actual"], language="text")
+                            st.error("❌ FAIL — Non-deterministic behavior.")
 
     with tab3:
         st.subheader("Performance & Complexity")
