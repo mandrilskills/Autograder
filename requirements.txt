@@ -7,3 +7,4 @@ langchain-google-genai
 langchain-community
 Pillow
 PyMuPDF
+pycparser
