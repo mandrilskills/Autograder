@@ -250,14 +250,10 @@ def generate_pdf(report: dict, student_name: str = "") -> str:
     def render_gemini_report(raw_text: str) -> list:
         """
         Converts the Gemini markdown report into ReportLab Paragraph flowables.
-        - Strips all markdown symbols (#, **, ##, ###)
-        - Skips boilerplate placeholder lines (Course Code, Evaluator, Date, etc.)
-        - Handles bullet points and numbered section headings cleanly
         """
         if not raw_text or raw_text.strip() in ("Not available.", "Gemini API not configured."):
             return [Paragraph("Gemini report not available.", sBody)]
 
-        # Patterns for lines that should be silently dropped
         SKIP_PATTERNS = [
             r'\[Insert', r'\[Student', r'\[Evaluator', r'\[Your',
             r'Course Code:', r'Course:', r'Student Name:', r'Student ID:',
@@ -272,35 +268,24 @@ def generate_pdf(report: dict, student_name: str = "") -> str:
         for line in lines:
             stripped = line.strip()
 
-            # Blank line → small spacer
             if not stripped:
                 elements_out.append(Spacer(1, 4))
                 continue
-
-            # Skip boilerplate placeholder lines entirely
-            if skip_re.search(stripped):
+            if skip_re.search(stripped) or re.match(r'^[-*_]{3,}$', stripped):
                 continue
 
-            # Skip pure horizontal rules
-            if re.match(r'^[-*_]{3,}$', stripped):
-                continue
-
-            # Strip leading markdown heading markers (###, ##, #)
             stripped = re.sub(r'^#{1,6}\s*', '', stripped).strip()
             if not stripped:
                 continue
 
-            # Numbered section heading: "1. Design" / "#### 1. Design"
             if re.match(r'^\d+[\.)]', stripped):
                 clean = re.sub(r'^\d+[\.)]\s*', '', stripped)
-                # Remove any remaining ** markers
                 clean = re.sub(r'\*\*(.*?)\*\*', r'\1', clean).strip()
                 if clean:
                     elements_out.append(Spacer(1, 6))
                     elements_out.append(Paragraph(clean, sGeminiBold))
                 continue
 
-            # Bold-only line (section title like **Design (Score: 10 / 15)**)
             if stripped.startswith("**") and stripped.endswith("**") and len(stripped) > 4:
                 clean = stripped.strip("*").strip()
                 if clean:
@@ -308,39 +293,22 @@ def generate_pdf(report: dict, student_name: str = "") -> str:
                     elements_out.append(Paragraph(clean, sGeminiBold))
                 continue
 
-            # Bullet point lines
             if stripped.startswith(("* ", "- ", "• ")):
                 clean = stripped[2:].strip()
-                # Replace inline **bold** with <b> tags, strip remaining *
                 clean = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', clean)
                 clean = re.sub(r'`(.*?)`', r'<i>\1</i>', clean)
                 if clean:
                     elements_out.append(Paragraph(f"&nbsp;&nbsp;&nbsp;• {clean}", sGemini))
                 continue
 
-            # Plain body line — clean up all markdown artifacts
             clean = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', stripped)
             clean = re.sub(r'`(.*?)`', r'<i>\1</i>', clean)
-            clean = re.sub(r'\*', '', clean)          # stray asterisks
+            clean = re.sub(r'\*', '', clean)
             clean = clean.replace("---", "").strip()
             if clean:
                 elements_out.append(Paragraph(clean, sGemini))
 
         return elements_out
-
-    # ── Helper: format input_raw for the test table ───────────────────────────
-    def format_input(case: dict) -> str:
-        """
-        Turns raw stdin bytes into a clean multi-line readable string.
-        Uses input_raw if present, falls back to input.
-        """
-        raw = case.get("input_raw", case.get("input", ""))
-        lines = [l for l in raw.split("\n") if l.strip() != ""]
-        if not lines:
-            return raw.strip() or "(empty)"
-        if len(lines) == 1:
-            return lines[0]
-        return "\n".join(f"[{i+1}] {l}" for i, l in enumerate(lines))
 
     # ─────────────────────────────────────────────────────────────────────────
     # BUILD DOCUMENT
@@ -355,7 +323,7 @@ def generate_pdf(report: dict, student_name: str = "") -> str:
         title="C Autograder Final Evaluation Report",
     )
 
-    E = []   # elements list
+    E = []
 
     # ═══════════════════════════════════════════════════════════════════════════
     # COVER BANNER
@@ -495,7 +463,6 @@ def generate_pdf(report: dict, student_name: str = "") -> str:
         ])
         summary_style.append(("BACKGROUND", (0, row_idx), (-1, row_idx), row_color))
 
-    # Total row
     summary_data.append([
         Paragraph("<b>TOTAL</b>", sBodyBold),
         Paragraph(f"<b>{total}</b>", sBodyBold),
@@ -519,42 +486,58 @@ def generate_pdf(report: dict, student_name: str = "") -> str:
     E.append(Spacer(1, 6))
 
     # ═══════════════════════════════════════════════════════════════════════════
-    # SECTION 1 — DESIGN QUALITY
+    # SECTIONS 1, 3, 4, 5
     # ═══════════════════════════════════════════════════════════════════════════
-    E.append(section_header("1.  DESIGN QUALITY ANALYSIS   ▸   "
-                            f"{report['design']['score']} / 15"))
+    E.append(section_header(f"1.  DESIGN QUALITY ANALYSIS   ▸   {report['design']['score']} / 15"))
+    for line in report["design"]["report"].split("\n"):
+        if line.strip(): E.append(Paragraph(line.strip(), sBody))
+    E.append(Spacer(1, 6))
 
-    design_report = report["design"]["report"]
-    for line in design_report.split("\n"):
-        line = line.strip()
-        if line:
-            E.append(Paragraph(line, sBody))
+    E.append(section_header(f"2.  PERFORMANCE & COMPLEXITY ANALYSIS   ▸   {report['performance']['score']} / 15"))
+    for line in report["performance"]["report"].split("\n"):
+        if line.strip(): E.append(Paragraph(line.strip(), sBody))
+    E.append(Spacer(1, 6))
+
+    E.append(section_header(f"3.  OPTIMIZATION SUGGESTIONS   ▸   {report['optimization']['score']} / 20"))
+    for line in report["optimization"]["report"].split("\n"):
+        if line.strip(): E.append(Paragraph(line.strip(), sBody))
+    E.append(Spacer(1, 6))
+
+    E.append(section_header(f"4.  STATIC ANALYSIS (CPPCHECK)   ▸   {report.get('static_score', 0):.1f} / 20"))
+    static_raw = report.get("static_report", "")
+    if static_raw.strip():
+        for line in static_raw.split("\n"):
+            line = line.strip()
+            if line:
+                if any(t in line.lower() for t in ["error", "warning"]):
+                    sWarn = PS("sw", fontName="Helvetica", fontSize=8, textColor=colors.HexColor("#856404"), leading=12, spaceAfter=2)
+                    E.append(Paragraph(f"⚠ {line}", sWarn))
+                else:
+                    E.append(Paragraph(line, sSmall))
+    else:
+        E.append(Paragraph("✓ No warnings or errors detected.", sBody))
     E.append(Spacer(1, 6))
 
     # ═══════════════════════════════════════════════════════════════════════════
-    # SECTION 2 — FUNCTIONAL TESTS
+    # SECTION 5 — FUNCTIONAL TESTS (Clean UI)
     # ═══════════════════════════════════════════════════════════════════════════
-    E.append(section_header("2.  FUNCTIONAL TEST EXECUTION REPORT   ▸   "
-                            f"{report['tests']['score']} / 30"))
-
+    E.append(section_header(f"5.  FUNCTIONAL TEST REPORT   ▸   {report['tests']['score']} / 30"))
     E.append(Paragraph(report["tests"]["report"], sBody))
     E.append(Paragraph(
-        "Strategy: <b>Self-Oracle</b> — LLM generates stdin inputs only. "
-        "The compiled binary produces expected outputs. "
+        "Strategy: <b>Self-Oracle + AST</b> — Inputs are generated deterministically. "
+        "The binary produces expected outputs. "
         "A second run confirms reproducibility.",
         sSmall
     ))
     E.append(Spacer(1, 8))
 
-    # Test cases table
     cases = report["tests"].get("cases", [])
     if cases:
         test_header_row = [
-            Paragraph("#",         sTableHeader),
-            Paragraph("Input\n(LLM Generated)", sTableHeader),
-            Paragraph("Expected\n(Oracle Run)",  sTableHeader),
-            Paragraph("Actual\n(Confirm Run)",   sTableHeader),
-            Paragraph("Result",    sTableHeader),
+            Paragraph("#", sTableHeader),
+            Paragraph("Input (stdin)", sTableHeader),
+            Paragraph("Output (stdout)", sTableHeader),
+            Paragraph("Result", sTableHeader),
         ]
         test_data_rows = [test_header_row]
         test_style = [
@@ -573,34 +556,36 @@ def generate_pdf(report: dict, student_name: str = "") -> str:
             result_style = sPassCell if passed else sFailCell
             result_text  = "✓ PASS" if passed else "✗ FAIL"
 
-            # Format input cleanly — numbered lines for multi-value inputs
-            input_display = format_input(c)
-            # Replace \n with actual newlines for Paragraph (use <br/>)
-            input_html    = input_display.replace("\n", "<br/>")
-            expected_html = str(c.get("expected", "")).replace("\n", "<br/>")
-            actual_html   = str(c.get("actual", "")).replace("\n", "<br/>")
+            input_html = c.get("input_raw", c.get("input", "")).strip().replace("\n", "<br/>")
+            if not input_html: input_html = "<i>(empty)</i>"
+
+            expected = str(c.get("expected", ""))
+            actual = str(c.get("actual", ""))
+
+            if passed:
+                output_html = actual.replace("\n", "<br/>")
+                if not output_html: output_html = "<i>(No output)</i>"
+            else:
+                if "Empty" in expected:
+                    output_html = "<i>(No output printed)</i>"
+                elif "Error" in expected or "Error" in actual:
+                    err_msg = actual if actual else expected
+                    output_html = f"<b>Execution Error:</b><br/>{err_msg.replace('\n', '<br/>')}"
+                else:
+                    output_html = f"<b>Run 1:</b> {expected.replace('\n', '<br/>')}<br/><br/><b>Run 2:</b> {actual.replace('\n', '<br/>')}"
 
             test_data_rows.append([
                 Paragraph(str(ri), sTableCellC),
                 Paragraph(input_html,    sTableCell),
-                Paragraph(expected_html, sTableCell),
-                Paragraph(actual_html,   sTableCell),
+                Paragraph(output_html,   sTableCell),
                 Paragraph(result_text,   result_style),
             ])
-            test_style.append(
-                ("BACKGROUND", (0, ri), (-1, ri), row_bg)
-            )
+            test_style.append(("BACKGROUND", (0, ri), (-1, ri), row_bg))
 
         AVAIL = PAGE_W - 2 * MARGIN
         test_table = Table(
             test_data_rows,
-            colWidths=[
-                AVAIL * 0.05,   # #
-                AVAIL * 0.25,   # input
-                AVAIL * 0.28,   # expected
-                AVAIL * 0.28,   # actual
-                AVAIL * 0.14,   # result
-            ],
+            colWidths=[AVAIL * 0.05, AVAIL * 0.35, AVAIL * 0.45, AVAIL * 0.15],
             repeatRows=1,
         )
         test_table.setStyle(TableStyle(test_style))
@@ -609,60 +594,10 @@ def generate_pdf(report: dict, student_name: str = "") -> str:
     E.append(Spacer(1, 6))
 
     # ═══════════════════════════════════════════════════════════════════════════
-    # SECTION 3 — PERFORMANCE
-    # ═══════════════════════════════════════════════════════════════════════════
-    E.append(section_header("3.  PERFORMANCE & COMPLEXITY ANALYSIS   ▸   "
-                            f"{report['performance']['score']} / 15"))
-
-    perf_report = report["performance"]["report"]
-    for line in perf_report.split("\n"):
-        line = line.strip()
-        if line:
-            E.append(Paragraph(line, sBody))
-    E.append(Spacer(1, 6))
-
-    # ═══════════════════════════════════════════════════════════════════════════
-    # SECTION 4 — OPTIMIZATION
-    # ═══════════════════════════════════════════════════════════════════════════
-    E.append(section_header("4.  OPTIMIZATION SUGGESTIONS   ▸   "
-                            f"{report['optimization']['score']} / 20"))
-
-    opt_report = report["optimization"]["report"]
-    for line in opt_report.split("\n"):
-        line = line.strip()
-        if line:
-            E.append(Paragraph(line, sBody))
-    E.append(Spacer(1, 6))
-
-    # ═══════════════════════════════════════════════════════════════════════════
-    # SECTION 5 — STATIC ANALYSIS
-    # ═══════════════════════════════════════════════════════════════════════════
-    E.append(section_header(f"5.  STATIC ANALYSIS (CPPCHECK)   ▸   "
-                            f"{report.get('static_score', 0):.1f} / 20"))
-
-    static_raw = report.get("static_report", "")
-    if static_raw.strip():
-        for line in static_raw.split("\n"):
-            line = line.strip()
-            if line:
-                # Highlight error/warning lines differently
-                if any(t in line.lower() for t in ["error", "warning"]):
-                    sWarn = PS("sw", fontName="Helvetica",
-                               fontSize=8, textColor=colors.HexColor("#856404"),
-                               leading=12, spaceAfter=2)
-                    E.append(Paragraph(f"⚠ {line}", sWarn))
-                else:
-                    E.append(Paragraph(line, sSmall))
-    else:
-        E.append(Paragraph("✓ No warnings or errors detected.", sBody))
-    E.append(Spacer(1, 6))
-
-    # ═══════════════════════════════════════════════════════════════════════════
-    # SECTION 6 — GEMINI FINAL REPORT  (new page for breathing room)
+    # SECTION 6 — GEMINI FINAL REPORT
     # ═══════════════════════════════════════════════════════════════════════════
     E.append(PageBreak())
     E.append(section_header("6.  FINAL ACADEMIC EVALUATION"))
-
     gemini_raw = report.get("gemini_final_report", "")
     for flowable in render_gemini_report(gemini_raw):
         E.append(flowable)
@@ -674,12 +609,9 @@ def generate_pdf(report: dict, student_name: str = "") -> str:
     E.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#CED4DA")))
     E.append(Spacer(1, 6))
     E.append(Paragraph(
-        f"Professional C Autograder System  •  "
-        f"Self-Oracle Test Mode  •  "
-        f"{datetime.datetime.now().strftime('%d %b %Y')}",
+        f"Professional C Autograder System  •  AST + Self-Oracle Test Mode  •  {datetime.datetime.now().strftime('%d %b %Y')}",
         sFooter
     ))
 
-    # ── Build ─────────────────────────────────────────────────────────────────
     doc.build(E)
     return path
