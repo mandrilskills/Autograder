@@ -4,6 +4,7 @@ Professional University-Grade C Autograder UI
 
 Features:
 ✅ Upload or paste C code
+✅ OCR for Handwritten Scans (Image/PDF) via Gemini Vision
 ✅ Real gcc compilation
 ✅ Gemini 2.5 Flash (LangChain) error explanation + hints
 ✅ Groq LLM — Self-Oracle input generation (inputs only, no guessed outputs)
@@ -13,12 +14,6 @@ Features:
 ✅ Live execution logs
 ✅ Gemini final report
 ✅ One-click PDF download
-
-Self-Oracle Testing:
-  Groq LLM generates only the stdin inputs.
-  The compiled binary runs on each input to produce the expected output.
-  A second independent run confirms reproducibility.
-  This removes all LLM guessing of program output — the program is the oracle.
 """
 
 import streamlit as st
@@ -26,7 +21,7 @@ import tempfile
 import os
 from utils import compile_c_code, run_cppcheck, generate_pdf
 from orchestrator import run_orchestration
-from llm import gemini_explain_compiler_errors
+from llm import gemini_explain_compiler_errors, gemini_extract_code_from_file
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -51,7 +46,7 @@ with st.sidebar:
 
 ### 🧠 AI Engines Used:
 - **Groq LLM** → Test Input Generation (Self-Oracle)
-- **Gemini 2.5 Flash** → Final Report & Compile Error Explanation
+- **Gemini 2.5 Flash** → Final Report, Error Explanation & OCR Vision
 
 ---
 
@@ -72,16 +67,42 @@ No LLM guessing of program output — zero hallucination risk.
 st.title("✅ Professional C Autograder System")
 st.caption("University-Ready | Hackathon-Grade | AI-Assisted (Self-Oracle Test Mode)")
 
+# ── OCR Pre-processing ────────────────────────────────────────────────────────
+if "extracted_code" not in st.session_state:
+    st.session_state["extracted_code"] = ""
+
+st.header("📝 1. Code Submission Selection")
+upload_type = st.radio(
+    "Select Input Method:", 
+    ["💻 Manual Paste / .c File Upload", "📄 Scan Handwritten Code (Image/PDF)"], 
+    horizontal=True
+)
+
+if upload_type == "📄 Scan Handwritten Code (Image/PDF)":
+    st.info("Upload a scanned image or PDF of handwritten C code. The AI will transcribe it for your review.")
+    ocr_file = st.file_uploader("Upload Scanned Image or PDF", type=["png", "jpg", "jpeg", "pdf"])
+    if ocr_file:
+        if st.button("🔍 Run AI OCR Extraction", use_container_width=True):
+            with st.spinner("Extracting handwritten code using Gemini Vision..."):
+                extracted = gemini_extract_code_from_file(ocr_file.read(), ocr_file.name)
+                st.session_state["extracted_code"] = extracted
+                st.success("✅ Extraction complete! Please review and correct the code below before submitting.")
+
 # ── Input form ────────────────────────────────────────────────────────────────
+st.header("🚀 2. Review & Evaluate")
 with st.form("submission_form"):
     student_name = st.text_input("🎓 Student Name", placeholder="e.g. Rahul Sharma")
     title        = st.text_input("📌 Program Title / Problem Description")
-    code_text    = st.text_area("✍️ Paste Your C Code Here", height=320)
-    uploaded     = st.file_uploader("OR Upload a .c Source File", type=["c"])
+    
+    # Text area uses session_state value so OCR results auto-populate here
+    code_text    = st.text_area("✍️ Paste / Edit Your C Code Here", value=st.session_state["extracted_code"], height=320)
+    uploaded     = st.file_uploader("OR Upload a .c Source File (Overrides Text Area)", type=["c"])
     submitted    = st.form_submit_button("🚀 Evaluate Code")
 
 # ── Main pipeline ─────────────────────────────────────────────────────────────
 if submitted:
+    # Clear OCR session state so it resets for the next grading session
+    st.session_state["extracted_code"] = ""
 
     if not title.strip():
         st.error("Program title / description is required.")
@@ -96,7 +117,7 @@ if submitted:
             code_text = code_bytes.decode("latin-1")
 
     if not code_text.strip():
-        st.error("No C code provided.")
+        st.error("No C code provided. Please paste code, extract from an image, or upload a .c file.")
         st.stop()
 
     # ── Save to temp file ─────────────────────────────────────────────────────
@@ -203,8 +224,7 @@ if submitted:
 
             for i, c in enumerate(cases, 1):
                 icon   = "✅" if c["pass"] else "❌"
-                # Show a clean preview in the expander title:
-                # replace the ↵ markers back to a short inline form
+                # Show a clean preview in the expander title
                 title_preview = c["input"].replace(" ↵\n", " | ").replace("↵", "").strip()
                 if len(title_preview) > 40:
                     title_preview = title_preview[:40] + "…"
@@ -212,26 +232,19 @@ if submitted:
 
                 with st.expander(header, expanded=not c["pass"]):
 
-                    # ── LLM Generated Input — primary fix ─────────────────────
+                    # ── LLM Generated Input ─────────────────────
                     st.markdown("**🤖 LLM Generated Input (sent to stdin):**")
 
-                    # Parse input_raw into individual lines for a clean table
                     raw_lines = c.get("input_raw", c["input"]).split("\n")
-                    # Remove the trailing empty string left by the final \n
                     raw_lines = [l for l in raw_lines if l != ""]
 
                     if len(raw_lines) == 1:
-                        # Single-value input — show as a clear code block
                         st.code(raw_lines[0], language=None)
                     else:
-                        # Multi-value input — show each line numbered so it's
-                        # obvious what value maps to which scanf/read call
                         st.markdown("*Multiple values (one per stdin read):*")
                         for ln_idx, line in enumerate(raw_lines, 1):
                             st.code(f"Read {ln_idx}: {line}", language=None)
 
-                    # Also show the raw escaped representation so there's
-                    # zero ambiguity about spaces, tabs, or newlines
                     raw_repr = c.get("input_raw", c["input"]).replace("\n", "\\n").replace("\t", "\\t")
                     st.caption(f"Raw stdin bytes: `{raw_repr}`")
 
