@@ -3,10 +3,11 @@ llm.py
 LLM client wrappers for the C Autograder system.
 
 Functions:
-  groq_generate_inputs(prompt)      → NEW: generates stdin inputs only (Self-Oracle)
+  groq_generate_inputs(prompt)      → generates stdin inputs only (Self-Oracle)
   groq_generate_tests(prompt)       → legacy: kept for backward compatibility
   gemini_generate_report(prompt)    → Gemini final academic report
   gemini_explain_compiler_errors()  → Gemini LangChain error hints
+  gemini_extract_code_from_file()   → NEW: OCR for handwritten/scanned C code
 
 Self-Oracle change:
   The old groq_generate_tests() asked the LLM to produce both inputs AND
@@ -18,6 +19,10 @@ Self-Oracle change:
   produces the expected outputs (self-oracle). This makes the LLM's job
   trivially easy and removes the main source of test failures.
 """
+
+import io
+from PIL import Image
+import fitz  # PyMuPDF
 
 from groq import Groq
 import google.generativeai as genai
@@ -47,9 +52,55 @@ if GEMINI_API_KEY:
         temperature=0.3
     )
 
+# ─────────────────────────────────────────────────────────────────────────────
+# NEW ★  gemini_extract_code_from_file (OCR)
+# ─────────────────────────────────────────────────────────────────────────────
+def gemini_extract_code_from_file(file_bytes: bytes, file_name: str) -> str:
+    """
+    Uses Gemini 2.5 Flash to extract handwritten/scanned C code from an image or PDF.
+    """
+    if not gemini_model:
+        return "Gemini API not configured. Cannot perform OCR extraction."
+
+    try:
+        images = []
+        if file_name.lower().endswith(".pdf"):
+            # Convert PDF pages to images using PyMuPDF
+            doc = fitz.open(stream=file_bytes, filetype="pdf")
+            for page in doc:
+                pix = page.get_pixmap(dpi=150)
+                img_bytes = pix.tobytes("png")
+                images.append(Image.open(io.BytesIO(img_bytes)))
+        else:
+            # Standard image upload (jpg, png)
+            images.append(Image.open(io.BytesIO(file_bytes)))
+
+        prompt = (
+            "You are an expert OCR system for C programming code. "
+            "Extract the C source code from the provided image(s). "
+            "If it is handwritten, carefully transcribe it and use your knowledge of C syntax "
+            "to fix obvious handwriting ambiguities (like confusing a semicolon for a colon). "
+            "Return ONLY the plain C code. Do not include markdown formatting like ```c."
+        )
+
+        response = gemini_model.generate_content([prompt] + images)
+        text = response.text.strip()
+        
+        # Clean up any markdown blocks if the LLM ignores instructions
+        if text.startswith("```"):
+            text = text.split("\n", 1)[-1]
+        if text.endswith("```"):
+            text = text.rsplit("\n", 1)[0]
+            
+        return text.strip()
+
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"OCR failed: {e}")
+        return f"// OCR Extraction Failed: {e}"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# NEW ★  groq_generate_inputs
+# groq_generate_inputs
 # Used by test_agent (Self-Oracle mode).
 # Asks the LLM to produce ONLY stdin input strings — NOT expected outputs.
 # ─────────────────────────────────────────────────────────────────────────────
